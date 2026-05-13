@@ -23,11 +23,11 @@ Drafted 2026-05-13. Verify before implementing.
 - [ ] Mongo-per-worker fixture — deferred to the `storage` branch (no DB code yet).
 
 ### 2. SolisCloud client (`solis-client` branch) — the foundation
-- [x] `src/solisdash/solis/signing.py` — HMAC-SHA1 canonical-string builder, MD5-base64 body digest, RFC1123 Date.
+- [x] `src/solisdash/signing.py` — HMAC-SHA1 canonical-string builder, MD5-base64 body digest, RFC1123 Date. Flattened out of the now-removed `solis/` subpackage — everything in this project talks to SolisCloud, so the extra namespace was redundant.
 - [x] Tests pinned to V2.0.3 §2.4 worked example: body `{"pageNo":1,"pageSize":10}` → Content-MD5 `kxdxk7rbAsrzSIWgEwhH4w==`, Date `Fri, 26 Jul 2019 06:00:46 GMT`. (Spec doesn't disclose the apiSecret used in §2.4's sig, so HMAC step is pinned to an independent stable vector.)
-- [ ] `src/solisdash/solis/client.py` — async `httpx` client. Exposes `userStationList`, `stationDetail`, `inverterList`, `inverterDetail`, `stationDay/Month/Year/All`, `alarmList`.
-- [ ] Raise `SolisAPIError(code, msg)` on non-success envelope. Recognise rate-limit codes and back off.
-- [ ] Wire all list endpoints with cursor/page parameters from the start — never `to_list()` unbounded.
+- [x] `src/solisdash/client.py` — async `httpx` client. Async context manager around one `httpx.AsyncClient`; exposes `user_station_list`, `station_detail`, `inverter_list`, `inverter_detail`, `station_day/month/year/all`, `alarm_list`. List responses come back as a `Page` dataclass (records + total + size + current + pages). KeyId header added alongside the four signed headers.
+- [x] `SolisAPIError(code, msg)` raised on non-success envelope. Retryable codes `1004` / `1007` and HTTP `429`/`502`/`503`/`504` trigger exponential backoff + jitter, bounded by `max_retries` (default 3), with a pluggable `sleep` callable for tests. Non-retryable codes raise immediately.
+- [x] List endpoints (`user_station_list`, `inverter_list`, `alarm_list`) take explicit `pageNo` / `pageSize` — no hidden auto-pagination.
 
 ### 3. Persistence (`storage` branch) — shared-key v1
 - [ ] `users` collection: `{_id, username, password_hash, role, created_at}`.

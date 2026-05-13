@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from solisdash.solis.signing import (
+from solisdash.signing import (
     CONTENT_TYPE_DEFAULT,
     build_headers,
     content_md5,
