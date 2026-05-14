@@ -109,6 +109,8 @@ def test_build_headers_rejects_path_without_leading_slash() -> None:
         )
 
 
-def test_default_content_type_matches_spec_text() -> None:
-    # V2.0.3 §2.2 says fixed value is application/json;charset=UTF-8.
-    assert CONTENT_TYPE_DEFAULT == "application/json;charset=UTF-8"
+def test_default_content_type_is_bare_application_json() -> None:
+    # §2.2 prose contradicts §2.4's worked example. The live API rejects
+    # the `charset=UTF-8` suffix with 403 `wrong sign`, so the bare form
+    # is what we ship.
+    assert CONTENT_TYPE_DEFAULT == "application/json"

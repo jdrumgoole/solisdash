@@ -17,7 +17,11 @@ import hmac
 from datetime import UTC, datetime
 from email.utils import format_datetime
 
-CONTENT_TYPE_DEFAULT = "application/json;charset=UTF-8"
+# V2.0.3 §2.2 prose says `application/json;charset=UTF-8`, but the worked
+# example in §2.4 and the live API both reject anything other than bare
+# `application/json` with `403 "wrong sign"`. Trust the spec's example
+# and the server, not the prose.
+CONTENT_TYPE_DEFAULT = "application/json"
 
 
 def content_md5(body: bytes) -> str:

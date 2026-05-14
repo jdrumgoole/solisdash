@@ -18,7 +18,7 @@ Shape, decided 2026-05-13:
 
 | Variable | Purpose |
 | --- | --- |
-| `SOLIS_KEY_ID` | SolisCloud API Key ID (the `KeyId` header). |
+| `SOLIS_KEY_ID` | SolisCloud API Key ID (the `apiId` in the `Authorization` header). |
 | `SOLIS_KEYSECRET` | SolisCloud API Key Secret (HMAC-SHA1 signing key). One word — no underscore between `KEY` and `SECRET`. |
 | `SOLIS_API_URL` | Region-specific base URL, e.g. `https://www.soliscloud.com:13333`. |
 | `SOLIS_MONGODB_URI` | MongoDB Atlas connection string (`mongodb+srv://…`). Database name is **`solis`**. Local dev must point at a non-prod cluster. |
@@ -33,7 +33,7 @@ Hosting: production runs on a **Digital Ocean droplet** (single uvicorn process 
 
 Things the spec dictates (verify in the PDF before relying on them in code):
 
-- **Auth is per-request HMAC-SHA1.** Required headers: `KeyId`, `Date`, `Content-MD5`, `Content-Type`, `Authorization`. The signing string is a canonicalised concatenation of method + Content-MD5 + Content-Type + Date + resource path. Get the signing helper right once and unit-test it against the worked examples in the PDF — most integration bugs live here.
+- **Auth is per-request HMAC-SHA1.** Required headers: `Date`, `Content-MD5`, `Content-Type`, `Authorization` (the apiId travels inside Authorization — no separate `KeyId` header, despite the PDF mentioning one in passing). The signing string is a canonicalised concatenation of method + Content-MD5 + Content-Type + Date + resource path. **Content-Type must be bare `application/json`**, not `application/json;charset=UTF-8` — the §2.2 prose contradicts §2.4's worked example, and the live API returns 403 `wrong sign` if you send the charset suffix. Get the signing helper right once and unit-test it against the worked examples in the PDF — most integration bugs live here.
 - **Base URL is region-specific.** Pick it from the PDF, do not hard-code the EU host.
 - **Rate limits are strict and per-key.** Client must back off on `1004` / `1007`-class errors instead of tight retries. The poller cadence has to respect this — assume minute-granularity at best for "live" calls, lower for history.
 - **Response envelope** is `{code, msg, data, success}`. Surface the upstream `code` in any raised exception so callers can branch on it.

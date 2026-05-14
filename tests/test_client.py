@@ -98,10 +98,11 @@ async def test_request_carries_signed_headers_and_keyid() -> None:
     req = recorder.requests[0]
     assert req.method == "POST"
     assert req.url.path == "/v1/api/userStationList"
-    assert req.headers["KeyId"] == KEY_ID
+    # Spec required headers (no separate KeyId — apiId travels in Authorization).
     for required in ("Content-MD5", "Content-Type", "Date", "Authorization"):
         assert required in req.headers
     assert req.headers["Authorization"].startswith(f"API {KEY_ID}:")
+    assert req.headers["Content-Type"] == "application/json"
 
     # Independently sign the exact bytes sent and compare.
     expected = build_headers(
@@ -310,6 +311,31 @@ async def test_alarm_list_sends_full_filter_set() -> None:
         "state": 0,
     }
     assert recorder.requests[0].url.path == "/v1/api/alarmList"
+
+
+async def test_alarm_list_handles_unwrapped_data_shape() -> None:
+    """alarmList puts page fields directly under `data`, with no `page` key."""
+    unwrapped = {
+        "records": [{"alarm_code": "2129"}, {"alarm_code": "2130"}],
+        "total": 2,
+        "size": 20,
+        "current": 1,
+        "pages": 1,
+    }
+    recorder = Recorder([httpx.Response(200, json=_envelope(unwrapped))])
+    async with make_client(recorder) as client:
+        page = await client.alarm_list(page_no=1, page_size=20, station_id="S1")
+    assert page.total == 2
+    assert [r["alarm_code"] for r in page.records] == ["2129", "2130"]
+
+
+async def test_alarm_list_still_handles_wrapped_data_shape() -> None:
+    """Belt and braces: tolerate the spec's parameter-table shape too."""
+    recorder = Recorder([_ok_json(_page([{"alarm_code": "2131"}]))])
+    async with make_client(recorder) as client:
+        page = await client.alarm_list(page_no=1, page_size=20, station_id="S1")
+    assert page.total == 1
+    assert page.records[0]["alarm_code"] == "2131"
 
 
 # --- lifecycle -------------------------------------------------------------

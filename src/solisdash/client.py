@@ -119,7 +119,6 @@ class SolisClient:
                 key_secret=self._key_secret,
                 content_type=CONTENT_TYPE_DEFAULT,
             )
-            headers["KeyId"] = self._key_id
             try:
                 response = await self._client.post(path, content=payload, headers=headers)
             except httpx.HTTPError as exc:
@@ -342,6 +341,10 @@ class SolisClient:
         nmi_code: str | None = None,
         state: int | None = None,
     ) -> Page:
+        # alarmList returns the page object directly under `data` — no
+        # `page` wrapper — even though §3.9's parameter table claims one.
+        # The §3.9 example response matches what the live API actually
+        # sends. Tolerate both shapes defensively.
         data = await self._post(
             "/v1/api/alarmList",
             _compact(
@@ -357,4 +360,5 @@ class SolisClient:
                 }
             ),
         )
-        return Page.from_envelope(data["page"])
+        page = data["page"] if isinstance(data, dict) and "page" in data else data
+        return Page.from_envelope(page)
