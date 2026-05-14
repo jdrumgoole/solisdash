@@ -30,9 +30,10 @@ Drafted 2026-05-13. Verify before implementing.
 - [x] List endpoints (`user_station_list`, `inverter_list`, `alarm_list`) take explicit `pageNo` / `pageSize` — no hidden auto-pagination.
 
 ### 3. Persistence (`storage` branch) — shared-key v1
-- [ ] `users` collection: `{_id, username, password_hash, role, created_at}`.
-- [ ] `stations` (cached metadata), `station_samples` (time-series of current-power snapshots), `station_daily`, `station_monthly`, `alarms`.
-- [ ] Index `(station_id, ts)` on `station_samples`.
+- [x] `src/solisdash/db.py` — `connect()`, `get_database()`, `ensure_indexes()`, `INDEXES` map. Async via `pymongo.AsyncMongoClient` (pymongo 4.17, no motor).
+- [x] Collections + indexes wired in `INDEXES`: `users` (unique `username`), `stations` (unique `id`), `station_samples` (`(station_id, ts)`), `station_daily` (unique `(station_id, date)`), `station_monthly` (unique `(station_id, month)`), `alarms` (`(station_id, alarm_begin_time desc)`, `state`).
+- [x] Mongo-per-worker test fixture (`tests/conftest.py`): per-test `AsyncMongoClient` (pymongo binds to the loop it's opened on, so session-scoped clients clash with pytest-asyncio's per-test loops); per-worker DB `solis_test_<gw>`; `clean_db` fixture clears all known collections per test; `pytest_sessionfinish` drops the test DB at session end. Skips cleanly when `SOLIS_MONGODB_URI` is unset.
+- [x] `tests/test_db.py` — verifies expected index names, unique-flag correctness, `ensure_indexes` idempotency, duplicate-key rejection on each unique index, indexed time-range query on `station_samples` (asserts `IXSCAN` via `explain`), `alarms.state` filter.
 - [ ] **Deferred to a later branch:** `solis_accounts` for per-user keys. v1 reads `SOLIS_KEY_ID` / `SOLIS_KEYSECRET` / `SOLIS_API_URL` from `.env` and shares one SolisCloud account across all logged-in users.
 
 ### 4. Auth + shell (`auth-shell` branch)
