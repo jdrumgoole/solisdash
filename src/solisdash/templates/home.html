@@ -2,15 +2,19 @@
 {% block title %}Dashboard · Solisdash{% endblock %}
 {% block content %}
 <hgroup>
-  <h2>Welcome, {{ user.username }}</h2>
-  <p>Live tiles and charts land in a later branch — the shell and auth are in place.</p>
+  <h2>
+    {% if tiles and tiles.station_name %}{{ tiles.station_name }}{% else %}Dashboard{% endif %}
+  </h2>
+  <p>Welcome, {{ user.username }}.</p>
 </hgroup>
 
-<article>
-  <header><strong>Account</strong></header>
-  <dl>
-    <dt>Signed in as</dt><dd>{{ user.username }}</dd>
-    <dt>Role</dt><dd>{{ user.role }}</dd>
-  </dl>
-</article>
+<section
+  id="tiles"
+  aria-live="polite"
+  hx-get="/tiles"
+  hx-trigger="every 30s"
+  hx-swap="innerHTML"
+>
+  {% include "_tiles.html" %}
+</section>
 {% endblock %}

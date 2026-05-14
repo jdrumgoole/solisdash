@@ -48,9 +48,16 @@ Drafted 2026-05-13. Verify before implementing.
 - [x] Browser smoke (Playwright): login page renders with Pico, form submits, home page shows the signed-in user + role, Sign out button clears the session and returns to /login. No console errors.
 
 ### 5. Live tiles (`live-tiles` branch)
-- [ ] HTMX-polled tiles: current power, today's yield, this-month yield, battery SOC, alarm count.
-- [ ] In-process LRU/TTL cache (30–60 s) keyed by `station_id` so a refresh storm doesn't blow the SolisCloud rate limit.
-- [ ] Tiles degrade gracefully to "last known" from `station_samples` when SolisCloud returns rate-limit codes.
+- [x] `src/solisdash/tiles.py` — `TilesData` dataclass, `parse_station_detail` + `from_sample` field-pluckers, async-safe `TTLCache` (locks per key, callers collapse onto one factory invocation), `LiveTilesService` composing `SolisClient` + `station_samples` for tiles + station-list lookups.
+- [x] HTMX-polled tiles on the home page: current power, today's yield, this month's yield, battery SOC, open alarms. Initial values server-rendered in `home.html`; HTMX swaps `_tiles.html` every 30 s via `hx-get="/tiles"`.
+- [x] Two TTL caches: 15 min for the `userStationList` lookup (which rarely changes), 45 s for tile data (so the page refreshing every 30 s never outpaces the 2 req/sec rate limit).
+- [x] Graceful degradation: `LiveTilesService.get_tiles` catches retryable `SolisAPIError` (`1004`/`1007`) and falls back to the most recent `station_samples` doc with `stale=True` + a "rate limited" note. Endpoint catches every error and renders a friendly alert rather than 500-ing.
+- [x] Station selection: pin via `SOLIS_STATION_ID` env var; otherwise the first station from `userStationList` is picked and cached for 15 minutes.
+- [x] `app.py`: SolisClient + LiveTilesService lazy-init on app.state; lifespan closes them on shutdown. `get_solis_client` / `get_tiles_service` deps. New `GET /tiles` returns an HTML fragment; `GET /` includes the same fragment for server-side first paint.
+- [x] HTMX served from CDN (`htmx.org@2.0.4`) with SRI integrity hash. Pico CSS continues to drive the look; new tile-grid styles in `static/style.css`.
+- [x] Tests (+21, now 81 total): `tests/test_tiles.py` (TTL cache hit/miss/concurrency/no-cached-exceptions, parsing + fallback shapes, service with mocked SolisCloud and DB fallback); `tests/test_app_tiles.py` (home renders tile values inline, `/tiles` returns a layout-free fragment, auth-gated, no-station / rate-limited / unconfigured / stale-fallback all produce friendly alerts).
+- [x] `tests/conftest.py`: `auth_client` now also overrides `get_tiles_service` with a `_NullTilesService` so auth-focused tests don't try to reach SolisCloud.
+- [x] Browser smoke (Playwright): logged in as a seeded user, home page rendered with the friendly alert path active (the dev API key is currently returning 403 from SolisCloud — credentials/IP-allowlist issue, not a code bug; signing-helper tests still pinned to the PDF worked example). No console errors. Logout still returns to /login.
 
 ### 6. Poller (`poller` branch)
 - [ ] `invoke poll-once` and `invoke backfill --from … --to …` — both Python, both argparse-compatible.

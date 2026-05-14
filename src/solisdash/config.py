@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     SOLIS_KEY_ID: str = ""
     SOLIS_KEYSECRET: str = ""
     SOLIS_API_URL: str = "https://www.soliscloud.com:13333"
+    SOLIS_STATION_ID: str = ""  # optional pinning; empty = pick first station
 
     # MongoDB
     SOLIS_MONGODB_URI: str = ""

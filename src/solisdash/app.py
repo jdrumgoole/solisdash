@@ -25,8 +25,10 @@ from solisdash.auth import (
     session_login,
     session_logout,
 )
+from solisdash.client import SolisAPIError, SolisClient
 from solisdash.config import get_settings
 from solisdash.db import ensure_indexes
+from solisdash.tiles import LiveTilesService, TilesData
 
 HERE = Path(__file__).parent
 TEMPLATES_DIR = HERE / "templates"
@@ -43,14 +45,19 @@ templates.env.globals["version"] = __version__
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Close the Mongo client on shutdown if `get_db` opened one."""
+    """Initialise lazy-init slots; close everything on shutdown."""
     app.state.mongo_client = None
+    app.state.solis_client = None
+    app.state.tiles_service = None
     try:
         yield
     finally:
-        client: AsyncMongoClient[dict[str, Any]] | None = app.state.mongo_client
-        if client is not None:
-            await client.close()
+        mongo: AsyncMongoClient[dict[str, Any]] | None = app.state.mongo_client
+        if mongo is not None:
+            await mongo.close()
+        solis: SolisClient | None = app.state.solis_client
+        if solis is not None:
+            await solis.aclose()
 
 
 app = FastAPI(title="Solisdash", version=__version__, lifespan=lifespan)
@@ -78,6 +85,38 @@ async def get_db(request: Request) -> AsyncDatabase[dict[str, Any]]:
     return cached[settings.SOLIS_MONGODB_DB]
 
 
+async def get_solis_client(request: Request) -> SolisClient:
+    """Lazily open one shared `SolisClient`. Closed on app shutdown."""
+    if request.app.state.solis_client is None:
+        settings = get_settings()
+        if not settings.SOLIS_KEY_ID or not settings.SOLIS_KEYSECRET:
+            raise RuntimeError("SOLIS_KEY_ID / SOLIS_KEYSECRET not configured")
+        request.app.state.solis_client = SolisClient(
+            base_url=settings.SOLIS_API_URL,
+            key_id=settings.SOLIS_KEY_ID,
+            key_secret=settings.SOLIS_KEYSECRET,
+        )
+    client: SolisClient = request.app.state.solis_client
+    return client
+
+
+async def get_tiles_service(
+    request: Request,
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+    solis: SolisClient = Depends(get_solis_client),
+) -> LiveTilesService:
+    """Single `LiveTilesService` per app, so the in-memory TTL cache persists."""
+    if request.app.state.tiles_service is None:
+        settings = get_settings()
+        request.app.state.tiles_service = LiveTilesService(
+            solis=solis,
+            db=db,
+            default_station_id=settings.SOLIS_STATION_ID or None,
+        )
+    service: LiveTilesService = request.app.state.tiles_service
+    return service
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
@@ -93,12 +132,50 @@ async def favicon() -> Response:
     )
 
 
-@app.get("/", response_class=HTMLResponse)
+async def _resolve_tiles(
+    tiles_service: LiveTilesService,
+) -> tuple[TilesData | None, str | None]:
+    """Fetch the default station's tiles. Return (data, error_message)."""
+    try:
+        station_id = await tiles_service.default_station_id()
+    except SolisAPIError as exc:
+        return None, f"SolisCloud rejected the call: {exc}"
+    except Exception as exc:
+        return None, f"Could not reach SolisCloud: {exc}"
+    if not station_id:
+        return None, "No stations found on this SolisCloud account."
+    try:
+        return await tiles_service.get_tiles(station_id), None
+    except SolisAPIError as exc:
+        return None, f"SolisCloud rejected the call: {exc}"
+    except Exception as exc:
+        return None, f"Could not reach SolisCloud: {exc}"
+
+
+@app.get("/", response_class=HTMLResponse, response_model=None)
 async def home(
-    request: Request, user: dict[str, Any] = Depends(require_user)
+    request: Request,
+    user: dict[str, Any] = Depends(require_user),
+    tiles_service: LiveTilesService = Depends(get_tiles_service),
 ) -> HTMLResponse:
+    tiles, error = await _resolve_tiles(tiles_service)
     return templates.TemplateResponse(
-        request, "home.html", {"user": user, "version": __version__}
+        request,
+        "home.html",
+        {"user": user, "tiles": tiles, "error": error},
+    )
+
+
+@app.get("/tiles", response_class=HTMLResponse, response_model=None)
+async def tiles_fragment(
+    request: Request,
+    user: dict[str, Any] = Depends(require_user),
+    tiles_service: LiveTilesService = Depends(get_tiles_service),
+) -> HTMLResponse:
+    """HTML fragment for HTMX swaps on the home page."""
+    tiles, error = await _resolve_tiles(tiles_service)
+    return templates.TemplateResponse(
+        request, "_tiles.html", {"tiles": tiles, "error": error}
     )
 
 

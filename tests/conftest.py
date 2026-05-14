@@ -20,8 +20,24 @@ from fastapi.testclient import TestClient  # noqa: E402
 from pymongo import AsyncMongoClient  # noqa: E402
 from pymongo.asynchronous.database import AsyncDatabase  # noqa: E402
 
-from solisdash.app import app, get_db  # noqa: E402
+from solisdash.app import app, get_db, get_tiles_service  # noqa: E402
 from solisdash.db import INDEXES, ensure_indexes  # noqa: E402
+from solisdash.tiles import TilesData  # noqa: E402
+
+
+class _NullTilesService:
+    """Quacks like LiveTilesService but never calls SolisCloud.
+
+    Used by `auth_client` so the home page renders during auth-focused tests
+    without trying to reach the real API. Tiles-focused tests override
+    `get_tiles_service` themselves.
+    """
+
+    async def default_station_id(self) -> str | None:
+        return None
+
+    async def get_tiles(self, station_id: str) -> TilesData:  # pragma: no cover
+        raise AssertionError("_NullTilesService.get_tiles should not be called")
 
 TEST_DB_PREFIX = "solis_test_"
 
@@ -100,10 +116,14 @@ async def auth_client(
     Running the app over ASGITransport keeps every Mongo call on one loop.
     """
 
-    async def _override() -> AsyncDatabase[dict[str, Any]]:
+    async def _override_db() -> AsyncDatabase[dict[str, Any]]:
         return clean_db
 
-    app.dependency_overrides[get_db] = _override
+    async def _override_tiles() -> _NullTilesService:
+        return _NullTilesService()
+
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_tiles_service] = _override_tiles
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
@@ -112,6 +132,7 @@ async def auth_client(
             yield ac
     finally:
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_tiles_service, None)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

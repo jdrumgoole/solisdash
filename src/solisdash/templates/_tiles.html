@@ -1,0 +1,40 @@
+{% macro tile(label, value, unit) %}
+<article class="tile">
+  <header>{{ label }}</header>
+  <strong class="tile-value">
+    {% if value is none %}—{% else %}{{ value }}{% endif %}
+  </strong>
+  {% if unit %}<small class="tile-unit">{{ unit }}</small>{% endif %}
+</article>
+{% endmacro %}
+
+{% if error %}
+  <p role="alert" class="error">{{ error }}</p>
+{% endif %}
+
+{% if tiles %}
+  {% if tiles.stale or tiles.error %}
+    <p class="stale-badge">
+      Showing last-known values
+      {% if tiles.data_ts %}from {{ tiles.data_ts.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
+      {% if tiles.error %} — {{ tiles.error }}{% endif %}.
+    </p>
+  {% endif %}
+
+  <div class="tile-grid">
+    {{ tile('Current power', '%.2f'|format(tiles.current_power) if tiles.current_power is not none else none, tiles.current_power_unit) }}
+    {{ tile("Today's yield", '%.2f'|format(tiles.today_energy) if tiles.today_energy is not none else none, tiles.today_energy_unit) }}
+    {{ tile('This month', '%.1f'|format(tiles.month_energy) if tiles.month_energy is not none else none, tiles.month_energy_unit) }}
+    {{ tile('Battery SOC', '%.0f'|format(tiles.battery_soc_pct) if tiles.battery_soc_pct is not none else none, '%') }}
+    {{ tile('Open alarms', tiles.alarm_count if tiles.alarm_count is not none else none, '') }}
+  </div>
+
+  <small class="tile-footnote">
+    {% if tiles.data_ts %}
+      Last reading: {{ tiles.data_ts.strftime('%Y-%m-%d %H:%M UTC') }}.
+    {% endif %}
+    Refreshes every 30 seconds.
+  </small>
+{% elif not error %}
+  <p>No live data yet.</p>
+{% endif %}
