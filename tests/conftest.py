@@ -7,22 +7,23 @@ from typing import Any
 
 import pytest
 from dotenv import load_dotenv
-from fastapi.testclient import TestClient
-from pymongo import AsyncMongoClient
-from pymongo.asynchronous.database import AsyncDatabase
 
-from solisdash.app import app
-from solisdash.db import INDEXES, ensure_indexes
-
+# Load .env and seed test defaults BEFORE importing the app, because the app
+# reads `SESSION_SECRET` at module import time when it constructs the
+# SessionMiddleware. `Settings` is `lru_cache`d, so late env-var changes are
+# invisible — set what you need here first.
 load_dotenv()
+os.environ.setdefault("SESSION_SECRET", "test-only-session-secret")
+
+import httpx  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from pymongo import AsyncMongoClient  # noqa: E402
+from pymongo.asynchronous.database import AsyncDatabase  # noqa: E402
+
+from solisdash.app import app, get_db  # noqa: E402
+from solisdash.db import INDEXES, ensure_indexes  # noqa: E402
 
 TEST_DB_PREFIX = "solis_test_"
-
-
-@pytest.fixture
-def client() -> Iterator[TestClient]:
-    with TestClient(app) as c:
-        yield c
 
 
 def _worker_id() -> str:
@@ -75,6 +76,42 @@ async def clean_db(
     for coll_name in INDEXES:
         await mongo_db[coll_name].delete_many({})
     return mongo_db
+
+
+@pytest.fixture
+def client() -> Iterator[TestClient]:
+    """TestClient against the real app, with `get_db` left unoverridden.
+
+    Use this for endpoints that don't touch the database (e.g. /health,
+    GET /login).
+    """
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture
+async def auth_client(
+    clean_db: AsyncDatabase[dict[str, Any]],
+) -> AsyncIterator[httpx.AsyncClient]:
+    """Async ASGI client with `get_db` overridden to the per-test database.
+
+    The TestClient (sync) drives requests on a fresh loop, which clashes with
+    pymongo's loop-binding once `clean_db` has been opened on the test loop.
+    Running the app over ASGITransport keeps every Mongo call on one loop.
+    """
+
+    async def _override() -> AsyncDatabase[dict[str, Any]]:
+        return clean_db
+
+    app.dependency_overrides[get_db] = _override
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as ac:
+            yield ac
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Solisdash{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Welcome, {{ user.username }}</h2>
+  <p>Live tiles and charts land in a later branch — the shell and auth are in place.</p>
+</hgroup>
+
+<article>
+  <header><strong>Account</strong></header>
+  <dl>
+    <dt>Signed in as</dt><dd>{{ user.username }}</dd>
+    <dt>Role</dt><dd>{{ user.role }}</dd>
+  </dl>
+</article>
+{% endblock %}

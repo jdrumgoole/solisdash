@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Solisdash{% endblock %}</title>
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+  />
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}" />
+</head>
+<body>
+  <header class="container">
+    <nav>
+      <ul>
+        <li><a href="/" class="contrast"><strong>Solisdash</strong></a></li>
+      </ul>
+      <ul>
+        {% set user = request.session.get('user') %}
+        {% if user %}
+          <li>{{ user.username }}</li>
+          <li>
+            <form action="/logout" method="post" class="inline">
+              <button type="submit" class="secondary outline">Sign out</button>
+            </form>
+          </li>
+        {% endif %}
+      </ul>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="container">
+    <small>Solisdash v{{ version|default('') }}</small>
+  </footer>
+</body>
+</html>

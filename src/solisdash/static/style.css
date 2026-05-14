@@ -1,0 +1,29 @@
+/* Solisdash overrides on top of Pico. */
+
+main.container {
+  padding-block: 2rem;
+}
+
+footer.container {
+  padding-block: 1.5rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+  margin-top: 3rem;
+  color: var(--pico-muted-color);
+}
+
+form.inline {
+  display: inline-block;
+  margin: 0;
+}
+
+.login-card {
+  max-width: 28rem;
+  margin-inline: auto;
+}
+
+p[role="alert"].error {
+  color: var(--pico-form-element-invalid-active-border-color);
+  background: color-mix(in srgb, var(--pico-form-element-invalid-active-border-color) 12%, transparent);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--pico-border-radius);
+}

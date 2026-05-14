@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import getpass
 import os
 import signal
 import sys
@@ -114,3 +116,48 @@ def lint(c: Context) -> None:
     """Run ruff and mypy."""
     c.run("uv run python -m ruff check .", pty=True)
     c.run("uv run python -m mypy", pty=True, warn=True)
+
+
+@task(help={"username": "Username", "role": "admin or user (default: user)"})
+def add_user(c: Context, username: str, role: str = "user") -> None:
+    """Insert a user into the `users` collection. Prompts for password."""
+    from pymongo import AsyncMongoClient
+    from pymongo.errors import DuplicateKeyError
+
+    from solisdash.auth import ROLES, create_user
+    from solisdash.config import get_settings
+    from solisdash.db import ensure_indexes
+
+    if role not in ROLES:
+        print(f"role must be one of {ROLES}, got {role!r}", file=sys.stderr)
+        sys.exit(2)
+
+    settings = get_settings()
+    if not settings.SOLIS_MONGODB_URI:
+        print("SOLIS_MONGODB_URI is not set", file=sys.stderr)
+        sys.exit(2)
+
+    password = getpass.getpass("Password: ")
+    confirm = getpass.getpass("Confirm:  ")
+    if password != confirm:
+        print("passwords do not match", file=sys.stderr)
+        sys.exit(2)
+    if not password:
+        print("password must not be empty", file=sys.stderr)
+        sys.exit(2)
+
+    async def _go() -> None:
+        client: AsyncMongoClient[dict] = AsyncMongoClient(settings.SOLIS_MONGODB_URI)  # type: ignore[type-arg]
+        try:
+            db = client[settings.SOLIS_MONGODB_DB]
+            await ensure_indexes(db)
+            try:
+                await create_user(db, username=username, password=password, role=role)
+            except DuplicateKeyError:
+                print(f"user {username!r} already exists", file=sys.stderr)
+                sys.exit(1)
+            print(f"created {role} {username!r}")
+        finally:
+            await client.close()
+
+    asyncio.run(_go())

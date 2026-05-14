@@ -37,9 +37,15 @@ Drafted 2026-05-13. Verify before implementing.
 - [ ] **Deferred to a later branch:** `solis_accounts` for per-user keys. v1 reads `SOLIS_KEY_ID` / `SOLIS_KEYSECRET` / `SOLIS_API_URL` from `.env` and shares one SolisCloud account across all logged-in users.
 
 ### 4. Auth + shell (`auth-shell` branch)
-- [ ] Session-cookie login, `bcrypt` password hashing.
-- [ ] `invoke add-user --username … --role …` to seed the first account.
-- [ ] Base Jinja layout, top nav, error pages, sign-out. (No account switcher in v1 — shared key.)
+- [x] Session-cookie login via `starlette.middleware.sessions.SessionMiddleware` (signed cookie, no server-side state). `bcrypt>=4.2` for hashing in `src/solisdash/auth.py` (hash/verify, `create_user`, `find_user`, `authenticate`, `session_login` / `session_logout`).
+- [x] FastAPI dependencies `get_current_user` (optional) and `require_user` (mandatory — HTML clients get 303 → /login, API/HTMX get 401).
+- [x] `src/solisdash/config.py` — pydantic-settings facade for env vars (`SOLIS_*`, `SESSION_SECRET`, `SOLIS_MONGODB_DB`); `lru_cache`d.
+- [x] `src/solisdash/app.py` rewrite: lifespan (closes Mongo on shutdown), SessionMiddleware, lazy `get_db` dependency, `/login` GET+POST, `/logout`, `/` (auth-gated home), `/favicon.ico` (silences dev console), `/health` unchanged. Templates expose `version` via a global so every page footers correctly.
+- [x] Pico CSS via CDN + `src/solisdash/static/style.css` for overrides; Jinja templates `base.html` / `login.html` / `home.html`.
+- [x] `invoke add-user --username <name> --role <admin|user>` — prompts for password via `getpass`, ensures indexes, refuses unknown roles, surfaces `DuplicateKeyError` as a clean exit-1.
+- [x] Tests (60 total, +23 in this branch): `tests/test_auth.py` (hash/verify, salt-per-call, create/find/authenticate, role validation, duplicate rejection); `tests/test_app_auth.py` (login form renders, unauthed → 303, JSON/HTMX → 401, login good/bad/unknown, full login→home→logout cycle, already-authed → redirect away from /login).
+- [x] Test fixture `auth_client` uses `httpx.AsyncClient` over `ASGITransport` instead of sync `TestClient` so request handling shares the test's event loop (pymongo's `AsyncMongoClient` is loop-bound). The `client` fixture remains sync for endpoints that don't touch Mongo.
+- [x] Browser smoke (Playwright): login page renders with Pico, form submits, home page shows the signed-in user + role, Sign out button clears the session and returns to /login. No console errors.
 
 ### 5. Live tiles (`live-tiles` branch)
 - [ ] HTMX-polled tiles: current power, today's yield, this-month yield, battery SOC, alarm count.

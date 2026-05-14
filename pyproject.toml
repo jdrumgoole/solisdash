@@ -16,6 +16,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "invoke>=2.2",
     "pymongo[srv]>=4.13",
+    "bcrypt>=4.2",
+    "itsdangerous>=2.2",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +47,18 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Cookie",
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+]
 
 [tool.mypy]
 python_version = "3.12"
