@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}History · Solisdash{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>History</h2>
+  <p>Charts read from MongoDB only — no live SolisCloud calls on this path.</p>
+</hgroup>
+
+{% if not stations %}
+  <p role="alert" class="error">
+    No stations stored yet. Run <code>uv run python -m invoke poll-once</code> first.
+  </p>
+{% else %}
+  <form id="history-form" onsubmit="return false">
+    <fieldset class="grid">
+      <label>
+        Station
+        <select name="station_id" id="station-select">
+          {% for s in stations %}
+            <option value="{{ s.id }}" {% if s.id == selected_station_id %}selected{% endif %}>
+              {{ s.name or s.id }}
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        View
+        <select name="view" id="view-select">
+          <option value="day" selected>Day (5 min)</option>
+          <option value="month">Month (daily)</option>
+          <option value="year">Year (monthly)</option>
+          <option value="all">All-time (yearly)</option>
+        </select>
+      </label>
+
+      <label data-view-field="day">
+        Date
+        <input type="date" id="date-input" value="{{ today }}" />
+      </label>
+
+      <label data-view-field="month" hidden>
+        Month
+        <input type="month" id="month-input" value="{{ current_month }}" />
+      </label>
+
+      <label data-view-field="year" hidden>
+        Year
+        <input type="number" id="year-input" min="2000" max="2100" value="{{ current_year }}" />
+      </label>
+    </fieldset>
+  </form>
+
+  <article>
+    <header>
+      <strong id="chart-title">Power</strong>
+      <small id="chart-unit" class="tile-unit"></small>
+    </header>
+    <div id="chart-wrap" style="position: relative; height: 22rem;">
+      <canvas id="history-chart"></canvas>
+    </div>
+    <small id="chart-status" class="tile-footnote">Loading…</small>
+  </article>
+{% endif %}
+
+<script
+  src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"
+  defer
+></script>
+<script
+  src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"
+  defer
+></script>
+<script src="{{ url_for('static', path='history.js') }}" defer></script>
+{% endblock %}

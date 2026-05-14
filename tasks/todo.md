@@ -71,9 +71,12 @@ Drafted 2026-05-13. Verify before implementing.
 - [x] Live API smoke: `invoke poll-once` wrote a real snapshot; `invoke backfill --start 2026-05-01 --end 2026-05-14` populated 14 daily rows; with `RUN_SCHEDULER=true` the in-process scheduler fired on startup and added another sample. Home-page tiles show fresh readings (Joe Drumgoole station, 0.18 kW now, 7.4 kWh today, 200.4 kWh this month, 53% battery).
 
 ### 7. History charts (`history` branch)
-- [ ] Chart endpoints return JSON only (Mongo reads, no SolisCloud calls on the chart path).
-- [ ] Chart.js views: day (5-min granularity), month (daily totals), year (monthly totals), all-time.
-- [ ] Date-range picker, station picker. (No account picker in v1.)
+- [x] `src/solisdash/history.py` — `HistoryService` reading MongoDB only: `day_series` (5-min `station_samples` for one day), `month_daily` (`station_daily` rows for `YYYY-MM`), `year_monthly` (Mongo `$group` summing `station_daily.energy` by `YYYY-MM`), `all_time` (same aggregation grouped by year). `Series` + `Point` dataclasses with a tiny `to_json()`. `parse_month` / `month_day_range` helpers.
+- [x] **No SolisCloud calls on the chart path.** Station list comes from the `stations` collection that the poller populates.
+- [x] `app.py`: `GET /history` renders the HTML shell; `GET /history/day.json`, `…/month.json`, `…/year.json`, `…/all.json` return chart data. All auth-gated. Bad dates / months return 400. Empty stations list returns an empty-series JSON instead of erroring.
+- [x] Templates: `history.html` (Pico-styled picker, view selector, Chart.js canvas) and a nav link in `base.html`. `static/history.js` fetches the right JSON for each view and swaps the Chart.js instance (line chart for day, bar charts for month/year/all). Chart.js 4.4.7 + `chartjs-adapter-date-fns` from jsdelivr, both `defer`-loaded so order is deterministic.
+- [x] Tests (+30, now 135 total): `tests/test_history.py` (parse_month edges, month_day_range incl. leap year, list_stations sorting, day-series filtering by station+day, month_daily window, `year_monthly` and `all_time` aggregations, Series.to_json shape). `tests/test_app_history.py` (page auth-gated, picker renders station names, empty-state warning, each JSON endpoint shape, 400 on bad date/month, defaults station to first seen, every endpoint redirects unauthed clients to /login).
+- [x] Browser smoke (Playwright): logged-in `/history` rendered the day view inline; switching to month showed the 14 daily bars from the backfill (May 9 at 24 kWh is the visible peak); year view collapsed to one 200.4 kWh bar for 2026-05. No console errors. Found and fixed a fabricated SRI hash on Chart.js (browser blocked the script) and an adapter-before-Chart load order issue in the process.
 
 ### 8. Polish (`polish` branch)
 - [ ] Alarm feed page.

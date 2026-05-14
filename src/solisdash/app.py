@@ -5,11 +5,12 @@ from __future__ import annotations
 import base64
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pymongo import AsyncMongoClient
@@ -28,6 +29,7 @@ from solisdash.auth import (
 from solisdash.client import SolisAPIError, SolisClient
 from solisdash.config import get_settings
 from solisdash.db import ensure_indexes
+from solisdash.history import HistoryService, parse_month
 from solisdash.poller import Poller
 from solisdash.ratelimit import TokenBucket
 from solisdash.scheduler import build_scheduler
@@ -157,6 +159,23 @@ async def get_tiles_service(
     return service
 
 
+async def get_history_service(
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+) -> HistoryService:
+    """A fresh HistoryService is cheap; no in-memory state to share."""
+    return HistoryService(db)
+
+
+async def _resolve_station_id(
+    history: HistoryService, requested: str | None
+) -> str | None:
+    """Use `requested` if given, else fall back to the first stored station."""
+    if requested:
+        return requested
+    stations = await history.list_stations()
+    return stations[0]["id"] if stations else None
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
@@ -252,3 +271,102 @@ async def login_submit(
 async def logout(request: Request) -> RedirectResponse:
     session_logout(request)
     return redirect_to("/login")
+
+
+# --- History page -----------------------------------------------------------
+
+
+@app.get("/history", response_class=HTMLResponse, response_model=None)
+async def history_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_user),
+    history: HistoryService = Depends(get_history_service),
+) -> HTMLResponse:
+    stations = await history.list_stations()
+    selected = stations[0]["id"] if stations else None
+    today = datetime.now(UTC).date().isoformat()
+    return templates.TemplateResponse(
+        request,
+        "history.html",
+        {
+            "user": user,
+            "stations": stations,
+            "selected_station_id": selected,
+            "today": today,
+            "current_month": today[:7],
+            "current_year": today[:4],
+        },
+    )
+
+
+@app.get("/history/day.json")
+async def history_day_json(
+    station_id: str | None = Query(None),
+    when: str = Query(..., description="YYYY-MM-DD"),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> JSONResponse:
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return JSONResponse(_empty_series_response("Power", "kW", station_id=None))
+    try:
+        when_date = date.fromisoformat(when)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    series = await history.day_series(sid, when_date)
+    return JSONResponse({"station_id": sid, **series.to_json()})
+
+
+@app.get("/history/month.json")
+async def history_month_json(
+    station_id: str | None = Query(None),
+    month: str = Query(..., description="YYYY-MM"),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> JSONResponse:
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return JSONResponse(_empty_series_response("Daily energy", "kWh", station_id=None))
+    try:
+        parse_month(month)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    series = await history.month_daily(sid, month)
+    return JSONResponse({"station_id": sid, **series.to_json()})
+
+
+@app.get("/history/year.json")
+async def history_year_json(
+    station_id: str | None = Query(None),
+    year: int = Query(...),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> JSONResponse:
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return JSONResponse(
+            _empty_series_response("Monthly energy", "kWh", station_id=None)
+        )
+    series = await history.year_monthly(sid, year)
+    return JSONResponse({"station_id": sid, **series.to_json()})
+
+
+@app.get("/history/all.json")
+async def history_all_json(
+    station_id: str | None = Query(None),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> JSONResponse:
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return JSONResponse(
+            _empty_series_response("Annual energy", "kWh", station_id=None)
+        )
+    series = await history.all_time(sid)
+    return JSONResponse({"station_id": sid, **series.to_json()})
+
+
+def _empty_series_response(
+    label: str, unit: str, *, station_id: str | None
+) -> dict[str, Any]:
+    return {"station_id": station_id, "label": label, "unit": unit, "points": []}

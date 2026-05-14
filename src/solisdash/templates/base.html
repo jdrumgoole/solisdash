@@ -21,6 +21,9 @@
     <nav>
       <ul>
         <li><a href="/" class="contrast"><strong>Solisdash</strong></a></li>
+        {% if request.session.get('user') %}
+          <li><a href="/history">History</a></li>
+        {% endif %}
       </ul>
       <ul>
         {% set user = request.session.get('user') %}
