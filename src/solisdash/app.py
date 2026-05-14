@@ -28,6 +28,9 @@ from solisdash.auth import (
 from solisdash.client import SolisAPIError, SolisClient
 from solisdash.config import get_settings
 from solisdash.db import ensure_indexes
+from solisdash.poller import Poller
+from solisdash.ratelimit import TokenBucket
+from solisdash.scheduler import build_scheduler
 from solisdash.tiles import LiveTilesService, TilesData
 
 HERE = Path(__file__).parent
@@ -45,19 +48,56 @@ templates.env.globals["version"] = __version__
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Initialise lazy-init slots; close everything on shutdown."""
+    """Initialise lazy-init slots; close everything on shutdown.
+
+    When `RUN_SCHEDULER` is set, also start an `AsyncIOScheduler` that
+    pumps SolisCloud data into MongoDB on a cron. Tests and CI default
+    to off so they never call out to the real API.
+    """
     app.state.mongo_client = None
     app.state.solis_client = None
     app.state.tiles_service = None
+    app.state.scheduler = None
+    app.state.poller = None
+    app.state.rate_limiter = None
+
+    settings = get_settings()
+    if settings.RUN_SCHEDULER and settings.SOLIS_KEY_ID and settings.SOLIS_MONGODB_URI:
+        app.state.rate_limiter = TokenBucket(
+            rate=settings.SCHEDULER_RATE_PER_SEC,
+            capacity=settings.SCHEDULER_RATE_PER_SEC * 2,
+        )
+        solis = SolisClient(
+            base_url=settings.SOLIS_API_URL,
+            key_id=settings.SOLIS_KEY_ID,
+            key_secret=settings.SOLIS_KEYSECRET,
+        )
+        mongo: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+            settings.SOLIS_MONGODB_URI
+        )
+        await ensure_indexes(mongo[settings.SOLIS_MONGODB_DB])
+        app.state.solis_client = solis
+        app.state.mongo_client = mongo
+        app.state.poller = Poller(
+            solis=solis,
+            db=mongo[settings.SOLIS_MONGODB_DB],
+            rate_limiter=app.state.rate_limiter,
+        )
+        app.state.scheduler = build_scheduler(app.state.poller, settings)
+        app.state.scheduler.start()
+
     try:
         yield
     finally:
-        mongo: AsyncMongoClient[dict[str, Any]] | None = app.state.mongo_client
-        if mongo is not None:
-            await mongo.close()
-        solis: SolisClient | None = app.state.solis_client
-        if solis is not None:
-            await solis.aclose()
+        scheduler = app.state.scheduler
+        if scheduler is not None:
+            scheduler.shutdown(wait=False)
+        mongo_cli: AsyncMongoClient[dict[str, Any]] | None = app.state.mongo_client
+        if mongo_cli is not None:
+            await mongo_cli.close()
+        solis_cli: SolisClient | None = app.state.solis_client
+        if solis_cli is not None:
+            await solis_cli.aclose()
 
 
 app = FastAPI(title="Solisdash", version=__version__, lifespan=lifespan)

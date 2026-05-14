@@ -22,8 +22,15 @@ Shape, decided 2026-05-13:
 | `SOLIS_KEYSECRET` | SolisCloud API Key Secret (HMAC-SHA1 signing key). One word — no underscore between `KEY` and `SECRET`. |
 | `SOLIS_API_URL` | Region-specific base URL, e.g. `https://www.soliscloud.com:13333`. |
 | `SOLIS_MONGODB_URI` | MongoDB Atlas connection string (`mongodb+srv://…`). Database name is **`solis`**. Local dev must point at a non-prod cluster. |
+| `SOLIS_MONGODB_DB` | Database name (default `solis`). Override for sandbox runs. |
+| `SOLIS_STATION_ID` | *Optional* — pin the dashboard to one station. Empty = pick the first one returned by `userStationList`. |
+| `SESSION_SECRET` | Session-cookie signing key. Required in production. |
+| `RUN_SCHEDULER` | *Default `false`*. Set `true` to run the in-process poller alongside uvicorn (live tiles work without it). |
+| `SCHEDULER_SAMPLE_MINUTES` | How often the scheduler pulls `stationDetail` into `station_samples`. Default 5. |
+| `SCHEDULER_DAILY_HOUR_UTC` / `SCHEDULER_DAILY_MINUTE_UTC` | When the daily rollup runs. Default 00:30 UTC. |
+| `SCHEDULER_RATE_PER_SEC` | Outbound rate-limit for the poller's token bucket. Default 1.5 (SolisCloud's per-endpoint cap is 2). |
 
-`.gitignore` lists `.env` so it can't be committed. `MONGO_URI` and `SESSION_SECRET` will join `.env` when storage and auth land — see `.env.example` for the full set.
+`.gitignore` lists `.env` so it can't be committed. See `.env.example` for the full set.
 
 Hosting: production runs on a **Digital Ocean droplet** (single uvicorn process under systemd, planned). Local dev runs the same `invoke start` task. The poller is in-process under uvicorn's lifespan (APScheduler) — no separate poller service.
 

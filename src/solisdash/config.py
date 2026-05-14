@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     # Web
     SESSION_SECRET: str = Field(default="", min_length=0)
 
+    # Scheduler — off by default so tests and CI never poll SolisCloud.
+    # Production opts in via `RUN_SCHEDULER=true` in `.env`.
+    RUN_SCHEDULER: bool = False
+    SCHEDULER_SAMPLE_MINUTES: int = 5
+    SCHEDULER_DAILY_HOUR_UTC: int = 0
+    SCHEDULER_DAILY_MINUTE_UTC: int = 30
+    SCHEDULER_RATE_PER_SEC: float = 1.5
+
 
 @lru_cache
 def get_settings() -> Settings:

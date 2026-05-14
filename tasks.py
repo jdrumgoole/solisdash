@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 from pathlib import Path
+from typing import Any
 
 from invoke.context import Context
 from invoke.tasks import task
@@ -159,5 +160,83 @@ def add_user(c: Context, username: str, role: str = "user") -> None:
             print(f"created {role} {username!r}")
         finally:
             await client.close()
+
+    asyncio.run(_go())
+
+
+def _build_poller_pieces() -> tuple[Any, Any, Any]:
+    """Construct (mongo_client, db, poller) for one-shot CLI tasks."""
+    from pymongo import AsyncMongoClient
+
+    from solisdash.client import SolisClient
+    from solisdash.config import get_settings
+    from solisdash.poller import Poller
+
+    settings = get_settings()
+    if not settings.SOLIS_MONGODB_URI:
+        print("SOLIS_MONGODB_URI is not set", file=sys.stderr)
+        sys.exit(2)
+    if not settings.SOLIS_KEY_ID or not settings.SOLIS_KEYSECRET:
+        print("SOLIS_KEY_ID / SOLIS_KEYSECRET not set", file=sys.stderr)
+        sys.exit(2)
+
+    mongo: AsyncMongoClient[dict] = AsyncMongoClient(  # type: ignore[type-arg]
+        settings.SOLIS_MONGODB_URI
+    )
+    db = mongo[settings.SOLIS_MONGODB_DB]
+    solis = SolisClient(
+        base_url=settings.SOLIS_API_URL,
+        key_id=settings.SOLIS_KEY_ID,
+        key_secret=settings.SOLIS_KEYSECRET,
+    )
+    poller = Poller(solis=solis, db=db)
+    return mongo, solis, poller
+
+
+@task
+def poll_once(c: Context) -> None:
+    """Pull stationDetail for every station and upsert into station_samples."""
+    from solisdash.db import ensure_indexes
+
+    mongo, solis, poller = _build_poller_pieces()
+
+    async def _go() -> None:
+        try:
+            await ensure_indexes(poller._db)
+            n = await poller.poll_current_all()
+            print(f"wrote {n} snapshot(s)")
+        finally:
+            await solis.aclose()
+            await mongo.close()
+
+    asyncio.run(_go())
+
+
+@task(help={"start": "YYYY-MM-DD inclusive", "end": "YYYY-MM-DD inclusive"})
+def backfill(c: Context, start: str, end: str) -> None:
+    """Backfill daily rollups for every station between two dates (inclusive)."""
+    from datetime import date
+
+    from solisdash.db import ensure_indexes
+
+    try:
+        start_d = date.fromisoformat(start)
+        end_d = date.fromisoformat(end)
+    except ValueError as exc:
+        print(f"bad date: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    mongo, solis, poller = _build_poller_pieces()
+
+    async def _go() -> None:
+        try:
+            await ensure_indexes(poller._db)
+            counts = await poller.backfill_daily(start=start_d, end=end_d)
+            for sid, n in counts.items():
+                print(f"  {sid}: {n} day(s)")
+            print(f"backfilled {sum(counts.values())} day(s) across {len(counts)} station(s)")
+        finally:
+            await solis.aclose()
+            await mongo.close()
 
     asyncio.run(_go())
