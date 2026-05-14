@@ -11,6 +11,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from solisdash.client import SolisAPIError, SolisClient
 from solisdash.poller import (
     Poller,
+    _alarm_to_doc,
     _detail_to_sample,
     _row_to_daily,
     iter_months,
@@ -321,3 +322,138 @@ async def test_poll_daily_for_month_returns_zero_on_solis_error(
 def test_solis_api_error_imported_for_callers() -> None:
     """Sanity-check that the public symbols stay importable."""
     assert SolisAPIError("X", "y").code == "X"
+
+
+# --- alarms ----------------------------------------------------------------
+
+
+def test_alarm_to_doc_extracts_fields() -> None:
+    polled = datetime(2026, 5, 14, 12, 30, tzinfo=UTC)
+    row = {
+        "id": "A1",
+        "stationId": "S1",
+        "alarmDeviceSn": "ABC123",
+        "alarmDeviceType": "3",
+        "alarmType": 0,
+        "alarmCode": "2129",
+        "alarmLevel": "1",
+        "alarmBeginTime": 1687918458326,
+        "alarmEndTime": 1687918484635,
+        "alarmMsg": "Inverter offline",
+        "state": "0",
+        "model": "1e",
+    }
+    doc = _alarm_to_doc("S1", row, polled)
+    assert doc is not None
+    assert doc["id"] == "A1"
+    assert doc["station_id"] == "S1"
+    assert doc["alarm_device_sn"] == "ABC123"
+    assert doc["alarm_code"] == "2129"
+    assert doc["alarm_begin_time"] == 1687918458326
+    assert doc["alarm_end_time"] == 1687918484635
+    assert doc["state"] == "0"
+    assert doc["polled_at"] == polled
+
+
+def test_alarm_to_doc_returns_none_without_id() -> None:
+    assert _alarm_to_doc("S1", {"alarmCode": "x"}, datetime.now(UTC)) is None
+
+
+async def test_poll_alarms_upserts_rows_by_id(
+    clean_db: AsyncDatabase[dict[str, Any]],
+) -> None:
+    handler = Scripted({
+        # alarmList returns data shaped like a Page directly under `data`
+        "/v1/api/alarmList": [
+            httpx.Response(
+                200,
+                json=_envelope({
+                    "records": [
+                        {"id": "A1", "alarmCode": "2129", "state": "0"},
+                        {"id": "A2", "alarmCode": "2130", "state": "1"},
+                    ],
+                    "total": 2,
+                    "size": 100,
+                    "current": 1,
+                    "pages": 1,
+                }),
+            ),
+        ],
+    })
+    async with _make_solis(handler) as solis:
+        poller = Poller(solis=solis, db=clean_db)
+        written = await poller.poll_alarms("S1")
+    assert written == 2
+    rows = [doc async for doc in clean_db["alarms"].find({"station_id": "S1"})]
+    assert {r["id"] for r in rows} == {"A1", "A2"}
+
+
+async def test_poll_alarms_is_idempotent(
+    clean_db: AsyncDatabase[dict[str, Any]],
+) -> None:
+    payload = _envelope({
+        "records": [{"id": "A1", "alarmCode": "2129", "state": "0"}],
+        "total": 1,
+        "size": 100,
+        "current": 1,
+        "pages": 1,
+    })
+    handler = Scripted({
+        "/v1/api/alarmList": [
+            httpx.Response(200, json=payload),
+            httpx.Response(200, json=payload),
+        ],
+    })
+    async with _make_solis(handler) as solis:
+        poller = Poller(solis=solis, db=clean_db)
+        await poller.poll_alarms("S1")
+        await poller.poll_alarms("S1")  # second call must not duplicate
+    count = await clean_db["alarms"].count_documents({"station_id": "S1"})
+    assert count == 1
+
+
+async def test_poll_alarms_returns_zero_on_solis_error(
+    clean_db: AsyncDatabase[dict[str, Any]],
+) -> None:
+    handler = Scripted({
+        "/v1/api/alarmList": [
+            httpx.Response(200, json=_envelope({}, code="1004")),
+        ],
+    })
+    async with _make_solis(handler) as solis:
+        poller = Poller(solis=solis, db=clean_db)
+        written = await poller.poll_alarms("S1")
+    assert written == 0
+
+
+async def test_poll_alarms_all_walks_station_list(
+    clean_db: AsyncDatabase[dict[str, Any]],
+) -> None:
+    handler = Scripted({
+        "/v1/api/userStationList": [
+            httpx.Response(
+                200, json=_envelope(_page([{"id": "S1"}, {"id": "S2"}]))
+            ),
+        ],
+        "/v1/api/alarmList": [
+            httpx.Response(
+                200,
+                json=_envelope({
+                    "records": [{"id": f"A-S1-{i}", "alarmCode": "x"} for i in range(2)],
+                    "total": 2, "size": 100, "current": 1, "pages": 1,
+                }),
+            ),
+            httpx.Response(
+                200,
+                json=_envelope({
+                    "records": [{"id": "A-S2-1", "alarmCode": "y"}],
+                    "total": 1, "size": 100, "current": 1, "pages": 1,
+                }),
+            ),
+        ],
+    })
+    async with _make_solis(handler) as solis:
+        poller = Poller(solis=solis, db=clean_db)
+        total = await poller.poll_alarms_all()
+    assert total == 3
+    assert await clean_db["alarms"].count_documents({}) == 3

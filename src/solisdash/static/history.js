@@ -14,6 +14,7 @@
   const unitEl = document.getElementById("chart-unit");
   const statusEl = document.getElementById("chart-status");
   const canvas = document.getElementById("history-chart");
+  const csvLink = document.getElementById("csv-download");
 
   let chart = null;
 
@@ -23,21 +24,16 @@
     });
   }
 
-  function urlForView(view, stationId) {
+  function paramsForView(view, stationId) {
     const params = new URLSearchParams({ station_id: stationId });
-    if (view === "day") {
-      params.set("when", dateInput.value);
-      return `/history/day.json?${params}`;
-    }
-    if (view === "month") {
-      params.set("month", monthInput.value);
-      return `/history/month.json?${params}`;
-    }
-    if (view === "year") {
-      params.set("year", yearInput.value);
-      return `/history/year.json?${params}`;
-    }
-    return `/history/all.json?${params}`;
+    if (view === "day") params.set("when", dateInput.value);
+    else if (view === "month") params.set("month", monthInput.value);
+    else if (view === "year") params.set("year", yearInput.value);
+    return params;
+  }
+
+  function urlForView(view, stationId, ext = "json") {
+    return `/history/${view}.${ext}?${paramsForView(view, stationId)}`;
   }
 
   function pointsToChartData(view, points) {
@@ -109,6 +105,7 @@
     const view = viewSelect.value;
     const stationId = stationSelect.value;
     showField(view);
+    if (csvLink) csvLink.href = urlForView(view, stationId, "csv");
     statusEl.textContent = "Loading…";
     try {
       const res = await fetch(urlForView(view, stationId), {

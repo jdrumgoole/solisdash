@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="auto">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -9,6 +9,17 @@
     href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
   />
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}" />
+  <script>
+    // Apply persisted theme as early as possible to avoid a flash on load.
+    (function () {
+      try {
+        var t = localStorage.getItem("solisdash-theme") || "auto";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (_) {
+        document.documentElement.setAttribute("data-theme", "auto");
+      }
+    })();
+  </script>
   <script
     src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"
     integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
@@ -23,9 +34,19 @@
         <li><a href="/" class="contrast"><strong>Solisdash</strong></a></li>
         {% if request.session.get('user') %}
           <li><a href="/history">History</a></li>
+          <li><a href="/alarms">Alarms</a></li>
         {% endif %}
       </ul>
       <ul>
+        <li>
+          <button
+            id="theme-toggle"
+            type="button"
+            class="secondary outline"
+            title="Toggle light / dark / auto"
+            aria-label="Toggle theme"
+          >🌓</button>
+        </li>
         {% set user = request.session.get('user') %}
         {% if user %}
           <li>{{ user.username }}</li>
@@ -46,5 +67,31 @@
   <footer class="container">
     <small>Solisdash v{{ version|default('') }}</small>
   </footer>
+
+  <script>
+    // Theme cycle: auto → light → dark → auto. Persists choice in localStorage.
+    (function () {
+      var btn = document.getElementById("theme-toggle");
+      if (!btn) return;
+      var order = ["auto", "light", "dark"];
+      var icons = { auto: "🌓", light: "☀️", dark: "🌙" };
+      function apply(theme) {
+        document.documentElement.setAttribute("data-theme", theme);
+        btn.textContent = icons[theme] || "🌓";
+        btn.setAttribute("title", "Theme: " + theme + " (click to cycle)");
+      }
+      try {
+        apply(localStorage.getItem("solisdash-theme") || "auto");
+      } catch (_) {
+        apply("auto");
+      }
+      btn.addEventListener("click", function () {
+        var current = document.documentElement.getAttribute("data-theme") || "auto";
+        var next = order[(order.indexOf(current) + 1) % order.length];
+        try { localStorage.setItem("solisdash-theme", next); } catch (_) {}
+        apply(next);
+      });
+    })();
+  </script>
 </body>
 </html>

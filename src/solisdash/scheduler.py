@@ -32,6 +32,11 @@ def build_scheduler(poller: Poller, settings: Settings) -> AsyncIOScheduler:
             log.info("scheduler: sample run wrote %d snapshots", n)
         except Exception:
             log.exception("scheduler: sample run failed")
+        try:
+            n = await poller.poll_alarms_all()
+            log.info("scheduler: alarm run upserted %d rows", n)
+        except Exception:
+            log.exception("scheduler: alarm run failed")
 
     async def _daily() -> None:
         log.info("scheduler: daily run starting")

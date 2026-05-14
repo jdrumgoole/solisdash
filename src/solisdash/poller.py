@@ -82,6 +82,35 @@ def _row_to_daily(station_id: str, row: dict[str, Any]) -> dict[str, Any] | None
     }
 
 
+def _alarm_to_doc(
+    station_id: str, row: dict[str, Any], polled_at: datetime
+) -> dict[str, Any] | None:
+    """Project one element of an `alarmList` payload into an `alarms` doc.
+
+    `alarmList` rows carry an upstream `id` string we use as the unique key.
+    Rows without an id are skipped — they'd collide with each other on upsert.
+    """
+    alarm_id = row.get("id")
+    if alarm_id is None:
+        return None
+    return {
+        "id": str(alarm_id),
+        "station_id": station_id,
+        "alarm_device_sn": str(row.get("alarmDeviceSn") or ""),
+        "alarm_device_type": _as_int(row.get("alarmDeviceType")),
+        "alarm_type": _as_int(row.get("alarmType")),
+        "alarm_level": str(row.get("alarmLevel") or ""),
+        "alarm_code": str(row.get("alarmCode") or ""),
+        "alarm_begin_time": _as_int(row.get("alarmBeginTime")),
+        "alarm_end_time": _as_int(row.get("alarmEndTime")),
+        "alarm_msg": str(row.get("alarmMsg") or ""),
+        "advice": str(row.get("advice") or ""),
+        "state": str(row.get("state") or ""),
+        "model": str(row.get("model") or ""),
+        "polled_at": polled_at,
+    }
+
+
 def iter_months(start: date, end: date) -> Iterator[str]:
     """Yield YYYY-MM strings from start.month through end.month inclusive."""
     if end < start:
@@ -200,3 +229,35 @@ class Poller:
                 written += await self.poll_daily_for_month(sid, month)
             counts[sid] = written
         return counts
+
+    async def poll_alarms(self, station_id: str, *, page_size: int = 100) -> int:
+        """Pull all open and processed alarms for one station; upsert by upstream id."""
+        await self._limiter.acquire()
+        try:
+            page = await self._solis.alarm_list(
+                page_no=1,
+                page_size=page_size,
+                station_id=station_id,
+            )
+        except SolisAPIError as exc:
+            log.warning("alarm_list %s failed: %s", station_id, exc)
+            return 0
+
+        polled_at = datetime.now(UTC)
+        written = 0
+        for record in page.records:
+            doc = _alarm_to_doc(station_id, record, polled_at)
+            if doc is None:
+                continue
+            await self._db["alarms"].update_one(
+                {"id": doc["id"]}, {"$set": doc}, upsert=True
+            )
+            written += 1
+        return written
+
+    async def poll_alarms_all(self) -> int:
+        """Run poll_alarms for every station; return total rows upserted."""
+        total = 0
+        for sid in await self.list_station_ids():
+            total += await self.poll_alarms(sid)
+        return total

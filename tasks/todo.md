@@ -79,10 +79,12 @@ Drafted 2026-05-13. Verify before implementing.
 - [x] Browser smoke (Playwright): logged-in `/history` rendered the day view inline; switching to month showed the 14 daily bars from the backfill (May 9 at 24 kWh is the visible peak); year view collapsed to one 200.4 kWh bar for 2026-05. No console errors. Found and fixed a fabricated SRI hash on Chart.js (browser blocked the script) and an adapter-before-Chart load order issue in the process.
 
 ### 8. Polish (`polish` branch)
-- [ ] Alarm feed page.
-- [ ] CSV export of daily/monthly totals.
-- [ ] Dark mode (CSS variables, no JS toggle library).
-- [ ] Health endpoint + readiness check for the poller.
+- [x] **Alarm feed.** New `src/solisdash/alarms.py` (`AlarmService`, `AlarmPage`, `ALARM_STATE_LABELS`). `Poller.poll_alarms` / `poll_alarms_all` pull `alarmList`, upsert into the `alarms` collection keyed by upstream `id`. Scheduler's `_sample` job now runs both station-detail and alarm polling on the same cadence. `alarms` index gets a partial-filter unique index on `id` (so legacy null-id docs don't collide). `db.ensure_indexes` recreates conflicting named indexes on `IndexKeySpecsConflict` for schema migrations. `/alarms` HTML page reads only from Mongo, with station + state filters, paginated.
+- [x] **CSV export.** `GET /history/{day,month,year,all}.csv` mirror the JSON endpoints; `Content-Type: text/csv` + `Content-Disposition: attachment` with station-and-range filenames. History page has a "Download CSV" link that tracks the current view selection in `history.js`.
+- [x] **Dark mode toggle.** Pico's `data-theme` driven from a tiny vanilla-JS script in `base.html`: nav button cycles auto → light → dark, persisted in `localStorage` under `solisdash-theme`. An early inline script applies the saved value before paint to avoid a flash.
+- [x] **`/ready` probe.** `/health` stays a cheap liveness check; new `/ready` pings Mongo and (when `RUN_SCHEDULER=true`) verifies the scheduler is running and the most-recent `station_samples.polled_at` is younger than 3× the sample interval. Returns JSON; HTTP 200 when ready, 503 otherwise. Handles Mongo's tz-naive datetimes by re-attaching UTC before subtraction.
+- [x] Tests (+25, now 160 total). `tests/test_alarms.py` covers `AlarmService` filters / pagination / clamping. `tests/test_poller.py` adds `_alarm_to_doc`, idempotent upsert, error-tolerant return, and `poll_alarms_all` walking the station list. `tests/test_app_polish.py` covers all four CSV endpoints (auth gating, headers, body shape, aggregations), the alarms page (auth, list, filter, empty state), `/ready` 200 / 503 paths, and the theme-toggle markup.
+- [x] Live API smoke (Playwright): logged-in `/alarms` rendered the scheduler-pulled "CAN_Comm_FAIL" alarm alongside a seeded smoke alarm; theme toggle cycled into a clean dark mode; `RUN_SCHEDULER=true` + `/ready` reported `mongo.ok=True`, `scheduler.last_sample_age_s=2.17s`; `history/month.csv` downloaded with the right Content-Disposition and the real 14-day data flowing through. No console errors.
 
 ## Out of scope (for now)
 

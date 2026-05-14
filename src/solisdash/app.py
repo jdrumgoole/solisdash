@@ -20,6 +20,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from starlette.middleware.sessions import SessionMiddleware
 
 from solisdash import __version__
+from solisdash.alarms import ALARM_STATE_LABELS, AlarmService
 from solisdash.auth import (
     authenticate,
     get_current_user,
@@ -31,7 +32,7 @@ from solisdash.auth import (
 from solisdash.client import SolisAPIError, SolisClient
 from solisdash.config import get_settings
 from solisdash.db import ensure_indexes
-from solisdash.history import HistoryService, parse_month
+from solisdash.history import HistoryService, Series, parse_month
 from solisdash.poller import Poller
 from solisdash.ratelimit import TokenBucket
 from solisdash.scheduler import build_scheduler
@@ -178,6 +179,12 @@ async def get_history_service(
     return HistoryService(db)
 
 
+async def get_alarm_service(
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+) -> AlarmService:
+    return AlarmService(db)
+
+
 async def _resolve_station_id(
     history: HistoryService, requested: str | None
 ) -> str | None:
@@ -191,6 +198,77 @@ async def _resolve_station_id(
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
+
+
+@app.get("/ready")
+async def ready(
+    request: Request,
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+) -> JSONResponse:
+    """Readiness probe: Mongo reachable, scheduler healthy (if enabled).
+
+    Always returns JSON. 200 when all checks pass, 503 otherwise. Liveness
+    (`/health`) only proves the process is alive; this proves the app can
+    actually serve work.
+    """
+    settings = get_settings()
+    checks: dict[str, Any] = {}
+    ok = True
+
+    try:
+        await db.command("ping")
+        checks["mongo"] = {"ok": True}
+    except Exception as exc:
+        checks["mongo"] = {"ok": False, "detail": str(exc)}
+        ok = False
+
+    if settings.RUN_SCHEDULER:
+        scheduler = request.app.state.scheduler
+        if scheduler is None or not scheduler.running:
+            checks["scheduler"] = {"ok": False, "detail": "not running"}
+            ok = False
+        else:
+            try:
+                latest = await db["station_samples"].find_one(
+                    sort=[("polled_at", -1)]
+                )
+            except Exception as exc:
+                checks["scheduler"] = {"ok": False, "detail": str(exc)}
+                ok = False
+            else:
+                if latest is None:
+                    checks["scheduler"] = {
+                        "ok": False,
+                        "detail": "no station_samples yet",
+                    }
+                    ok = False
+                else:
+                    polled_at = latest.get("polled_at")
+                    if isinstance(polled_at, datetime):
+                        # Mongo's BSON dates come back naive (UTC) by default.
+                        if polled_at.tzinfo is None:
+                            polled_at = polled_at.replace(tzinfo=UTC)
+                        age_s: float | None = (
+                            datetime.now(UTC) - polled_at
+                        ).total_seconds()
+                    else:
+                        age_s = None
+                    stale_after = settings.SCHEDULER_SAMPLE_MINUTES * 60 * 3
+                    healthy = age_s is not None and age_s < stale_after
+                    checks["scheduler"] = {
+                        "ok": healthy,
+                        "last_sample_age_s": age_s,
+                        "stale_after_s": stale_after,
+                    }
+                    if not healthy:
+                        ok = False
+    else:
+        checks["scheduler"] = {"ok": True, "detail": "RUN_SCHEDULER disabled"}
+
+    return JSONResponse(
+        {"ready": ok, "version": __version__, "checks": checks},
+        status_code=200 if ok else 503,
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -388,3 +466,130 @@ def _empty_series_response(
     label: str, unit: str, *, station_id: str | None
 ) -> dict[str, Any]:
     return {"station_id": station_id, "label": label, "unit": unit, "points": []}
+
+
+def _series_to_csv(series: Series, *, x_header: str, y_header: str) -> str:
+    """Render a Series as a tiny RFC-4180 CSV."""
+    lines = [f"{x_header},{y_header} ({series.unit})"]
+    for p in series.points:
+        v = "" if p.v is None else f"{p.v}"
+        lines.append(f"{p.t},{v}")
+    return "\n".join(lines) + "\n"
+
+
+def _csv_response(body: str, filename: str) -> Response:
+    return Response(
+        content=body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/history/day.csv")
+async def history_day_csv(
+    station_id: str | None = Query(None),
+    when: str = Query(..., description="YYYY-MM-DD"),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> Response:
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return _csv_response("timestamp_ms,power\n", "history-day.csv")
+    try:
+        when_date = date.fromisoformat(when)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    series = await history.day_series(sid, when_date)
+    return _csv_response(
+        _series_to_csv(series, x_header="timestamp_ms", y_header="power"),
+        f"history-day-{sid}-{when}.csv",
+    )
+
+
+@app.get("/history/month.csv")
+async def history_month_csv(
+    station_id: str | None = Query(None),
+    month: str = Query(..., description="YYYY-MM"),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> Response:
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return _csv_response("date,energy\n", "history-month.csv")
+    try:
+        parse_month(month)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    series = await history.month_daily(sid, month)
+    return _csv_response(
+        _series_to_csv(series, x_header="date", y_header="energy"),
+        f"history-month-{sid}-{month}.csv",
+    )
+
+
+@app.get("/history/year.csv")
+async def history_year_csv(
+    station_id: str | None = Query(None),
+    year: int = Query(...),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> Response:
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return _csv_response("month,energy\n", "history-year.csv")
+    series = await history.year_monthly(sid, year)
+    return _csv_response(
+        _series_to_csv(series, x_header="month", y_header="energy"),
+        f"history-year-{sid}-{year}.csv",
+    )
+
+
+@app.get("/history/all.csv")
+async def history_all_csv(
+    station_id: str | None = Query(None),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> Response:
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return _csv_response("year,energy\n", "history-all.csv")
+    series = await history.all_time(sid)
+    return _csv_response(
+        _series_to_csv(series, x_header="year", y_header="energy"),
+        f"history-all-{sid}.csv",
+    )
+
+
+# --- Alarms page ------------------------------------------------------------
+
+
+@app.get("/alarms", response_class=HTMLResponse, response_model=None)
+async def alarms_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_user),
+    history: HistoryService = Depends(get_history_service),
+    alarms_service: AlarmService = Depends(get_alarm_service),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    station_id: str | None = Query(None),
+    state: str | None = Query(None),
+) -> HTMLResponse:
+    stations = await history.list_stations()
+    page_data = await alarms_service.list_alarms(
+        page_no=page,
+        page_size=page_size,
+        station_id=station_id or None,
+        state=state or None,
+    )
+    return templates.TemplateResponse(
+        request,
+        "alarms.html",
+        {
+            "user": user,
+            "stations": stations,
+            "selected_station_id": station_id or "",
+            "selected_state": state or "",
+            "state_labels": ALARM_STATE_LABELS,
+            "alarms": page_data,
+        },
+    )

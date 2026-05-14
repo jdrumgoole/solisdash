@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Alarms · Solisdash{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Alarms</h2>
+  <p>Faults and warnings the poller has seen. Reads from MongoDB only.</p>
+</hgroup>
+
+<form method="get" action="/alarms">
+  <fieldset class="grid">
+    <label>
+      Station
+      <select name="station_id">
+        <option value="">All stations</option>
+        {% for s in stations %}
+          <option value="{{ s.id }}" {% if s.id == selected_station_id %}selected{% endif %}>
+            {{ s.name or s.id }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      State
+      <select name="state">
+        <option value="">Any</option>
+        {% for code, label in state_labels.items() %}
+          <option value="{{ code }}" {% if code == selected_state %}selected{% endif %}>
+            {{ label }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>&nbsp;</span>
+      <button type="submit">Apply</button>
+    </label>
+  </fieldset>
+</form>
+
+{% if not alarms.rows %}
+  <p>No alarms match these filters.</p>
+{% else %}
+  <figure>
+    <table role="grid">
+      <thead>
+        <tr>
+          <th>When</th>
+          <th>Station</th>
+          <th>Device SN</th>
+          <th>Code</th>
+          <th>Level</th>
+          <th>State</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in alarms.rows %}
+          <tr>
+            <td>
+              {% if a.alarm_begin_time %}
+                {{ (a.alarm_begin_time // 1000)|int }}
+              {% else %}—{% endif %}
+            </td>
+            <td>{{ a.station_id }}</td>
+            <td>{{ a.alarm_device_sn }}</td>
+            <td>{{ a.alarm_code }}</td>
+            <td>{{ a.alarm_level }}</td>
+            <td>{{ state_labels.get(a.state, a.state) }}</td>
+            <td>{{ a.alarm_msg or a.advice }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </figure>
+
+  <nav class="alarm-pager">
+    {% if alarms.page_no > 1 %}
+      <a href="?page={{ alarms.page_no - 1 }}&station_id={{ selected_station_id }}&state={{ selected_state }}">← Previous</a>
+    {% endif %}
+    <span>Page {{ alarms.page_no }} · {{ alarms.total }} total</span>
+    {% if alarms.has_next %}
+      <a href="?page={{ alarms.page_no + 1 }}&station_id={{ selected_station_id }}&state={{ selected_state }}">Next →</a>
+    {% endif %}
+  </nav>
+{% endif %}
+{% endblock %}

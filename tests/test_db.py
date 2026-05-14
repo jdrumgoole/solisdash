@@ -19,7 +19,7 @@ async def test_ensure_indexes_creates_expected_index_keys(
         "station_samples": {"_id_", "station_ts"},
         "station_daily": {"_id_", "station_date_unique"},
         "station_monthly": {"_id_", "station_month_unique"},
-        "alarms": {"_id_", "station_alarm_time", "alarm_state"},
+        "alarms": {"_id_", "alarm_id_unique", "station_alarm_time", "alarm_state"},
     }
     for coll_name, names in expected.items():
         info = await mongo_db[coll_name].index_information()

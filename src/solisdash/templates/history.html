@@ -52,9 +52,12 @@
   </form>
 
   <article>
-    <header>
-      <strong id="chart-title">Power</strong>
-      <small id="chart-unit" class="tile-unit"></small>
+    <header style="display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;">
+      <span>
+        <strong id="chart-title">Power</strong>
+        <small id="chart-unit" class="tile-unit"></small>
+      </span>
+      <a id="csv-download" class="secondary outline" role="button" href="#">Download CSV</a>
     </header>
     <div id="chart-wrap" style="position: relative; height: 22rem;">
       <canvas id="history-chart"></canvas>
