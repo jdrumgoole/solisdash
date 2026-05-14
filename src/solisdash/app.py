@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import base64
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +36,16 @@ from solisdash.poller import Poller
 from solisdash.ratelimit import TokenBucket
 from solisdash.scheduler import build_scheduler
 from solisdash.tiles import LiveTilesService, TilesData
+
+# Uvicorn only configures its own named loggers, leaving the root logger
+# without handlers. `basicConfig` here gives `solisdash.*` loggers a default
+# stderr handler at INFO so the scheduler/poller logs land in `uvicorn.log`.
+# `basicConfig` is a no-op if the root logger already has handlers, so this
+# stays out of the way when uvicorn (or pytest) has wired up something else.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 HERE = Path(__file__).parent
 TEMPLATES_DIR = HERE / "templates"
@@ -194,12 +206,18 @@ async def favicon() -> Response:
 async def _resolve_tiles(
     tiles_service: LiveTilesService,
 ) -> tuple[TilesData | None, str | None]:
-    """Fetch the default station's tiles. Return (data, error_message)."""
+    """Fetch the default station's tiles. Return (data, error_message).
+
+    Catches the expected failure modes (SolisCloud envelope errors, httpx
+    transport errors, and `RuntimeError` from unconfigured settings) and
+    renders them as friendly alerts. Anything else propagates so genuine
+    bugs surface in logs.
+    """
     try:
         station_id = await tiles_service.default_station_id()
     except SolisAPIError as exc:
         return None, f"SolisCloud rejected the call: {exc}"
-    except Exception as exc:
+    except (httpx.HTTPError, RuntimeError) as exc:
         return None, f"Could not reach SolisCloud: {exc}"
     if not station_id:
         return None, "No stations found on this SolisCloud account."
@@ -207,7 +225,7 @@ async def _resolve_tiles(
         return await tiles_service.get_tiles(station_id), None
     except SolisAPIError as exc:
         return None, f"SolisCloud rejected the call: {exc}"
-    except Exception as exc:
+    except (httpx.HTTPError, RuntimeError) as exc:
         return None, f"Could not reach SolisCloud: {exc}"
 
 

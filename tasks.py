@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import json
 import os
 import signal
 import sys
@@ -14,6 +15,7 @@ from invoke.tasks import task
 ROOT = Path(__file__).parent
 VAR = ROOT / "var"
 PIDFILE = VAR / "uvicorn.pid"
+INFOFILE = VAR / "uvicorn.info.json"
 LOGFILE = VAR / "uvicorn.log"
 APP = "solisdash.app:app"
 
@@ -38,6 +40,22 @@ def _read_pid() -> int | None:
         return None
 
 
+def _read_runtime_info() -> dict[str, Any]:
+    """Host + port the running server was started with, or defaults."""
+    if INFOFILE.exists():
+        try:
+            data = json.loads(INFOFILE.read_text())
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"host": DEFAULT_HOST, "port": DEFAULT_PORT}
+
+
+def _write_runtime_info(*, host: str, port: int) -> None:
+    INFOFILE.write_text(json.dumps({"host": host, "port": port}))
+
+
 @task
 def start(
     c: Context,
@@ -60,6 +78,7 @@ def start(
         f">> {LOGFILE} 2>&1 & echo $! > {PIDFILE}"
     )
     c.run(cmd, pty=False)
+    _write_runtime_info(host=host, port=port)
     print(f"started on http://{host}:{port} (logs: {LOGFILE})")
     status(c)
 
@@ -70,6 +89,7 @@ def stop(c: Context) -> None:
     pid = _read_pid()
     if pid is None:
         print("not running")
+        INFOFILE.unlink(missing_ok=True)
         return
     if _alive(pid):
         os.kill(pid, signal.SIGTERM)
@@ -77,18 +97,30 @@ def stop(c: Context) -> None:
     else:
         print(f"stale pidfile (pid {pid} dead)")
     PIDFILE.unlink(missing_ok=True)
+    INFOFILE.unlink(missing_ok=True)
 
 
 @task
-def restart(c: Context) -> None:
-    """Restart the FastAPI app."""
+def restart(
+    c: Context,
+    host: str | None = None,
+    port: int | None = None,
+    reload: bool = False,
+) -> None:
+    """Restart the FastAPI app. Preserves the previous host/port unless overridden."""
+    previous = _read_runtime_info()
     stop(c)
-    start(c)
+    start(
+        c,
+        host=host if host is not None else str(previous.get("host", DEFAULT_HOST)),
+        port=port if port is not None else int(previous.get("port", DEFAULT_PORT)),
+        reload=reload,
+    )
 
 
 @task
 def status(c: Context) -> None:
-    """Show server status and probe /health."""
+    """Show server status and probe /health on the port the server was started with."""
     pid = _read_pid()
     if pid is None:
         print("not running")
@@ -96,9 +128,12 @@ def status(c: Context) -> None:
     if not _alive(pid):
         print(f"stale pidfile (pid {pid} dead)")
         return
-    print(f"running (pid {pid})")
+    info = _read_runtime_info()
+    host = str(info.get("host", DEFAULT_HOST))
+    port = int(info.get("port", DEFAULT_PORT))
+    print(f"running (pid {pid}) on http://{host}:{port}")
     c.run(
-        f"curl -fsS http://{DEFAULT_HOST}:{DEFAULT_PORT}/health || echo 'health probe failed'",
+        f"curl -fsS http://{host}:{port}/health || echo 'health probe failed'",
         warn=True,
     )
 
