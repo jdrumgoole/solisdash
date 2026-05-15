@@ -1,17 +1,44 @@
-"""Typed settings loaded from environment / .env."""
+"""Typed settings loaded from environment / .env files."""
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-    """Process-wide configuration. Read from environment or `.env`."""
+def user_config_dir() -> Path:
+    """Per-user config directory.
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    Honours `XDG_CONFIG_HOME` on every platform — macOS often doesn't, but
+    one consistent path beats the platform-specific tangle.
+    """
+    base = os.environ.get("XDG_CONFIG_HOME")
+    return Path(base) / "solisdash" if base else Path.home() / ".config" / "solisdash"
+
+
+def user_config_path() -> Path:
+    """`.env` the `solisdash` CLI writes first-run configuration into."""
+    return user_config_dir() / ".env"
+
+
+class Settings(BaseSettings):
+    """Process-wide configuration. Read from environment or `.env`.
+
+    Two `.env` files are honoured, with the second overriding the first:
+
+    1. `~/.config/solisdash/.env` — the CLI writes first-run config here,
+       so installs from PyPI have a home for it.
+    2. `./.env` in the current directory — dev-checkout convention.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=(str(user_config_path()), ".env"),
+        extra="ignore",
+    )
 
     # SolisCloud
     SOLIS_KEY_ID: str = ""

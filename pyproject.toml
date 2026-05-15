@@ -1,6 +1,6 @@
 [project]
 name = "solisdash"
-version = "0.5.0"
+version = "0.6.0"
 description = "Self-hosted dashboard for the SolisCloud (Ginlong Solis) platform"
 readme = "README.md"
 requires-python = ">=3.10"
