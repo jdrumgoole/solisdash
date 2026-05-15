@@ -1,10 +1,17 @@
-"""Typed settings loaded from environment / .env files."""
+"""Typed settings loaded from `solisdash.toml`, the project `.env`, and the
+process environment.
+
+Source precedence (later wins):
+1. `~/.config/solisdash/solisdash.toml` — the in-browser setup wizard
+   writes here. Cleanest for installed-from-PyPI users.
+2. `./.env` in the current directory — dev-checkout convention; no longer
+   used for installed users.
+3. Process environment variables.
+"""
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
-from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import (
@@ -12,35 +19,20 @@ from pydantic_settings import (
     DotEnvSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
+    TomlConfigSettingsSource,
 )
 
+from solisdash.configfile import user_config_dir, user_config_toml_path
 
-def user_config_dir() -> Path:
-    """Per-user config directory.
-
-    Honours `XDG_CONFIG_HOME` on every platform — macOS often doesn't, but
-    one consistent path beats the platform-specific tangle.
-    """
-    base = os.environ.get("XDG_CONFIG_HOME")
-    return Path(base) / "solisdash" if base else Path.home() / ".config" / "solisdash"
-
-
-def user_config_path() -> Path:
-    """`.env` the `solisdash` CLI writes first-run configuration into."""
-    return user_config_dir() / ".env"
+# Re-export so callers don't need both modules.
+__all__ = ["Settings", "get_settings", "user_config_dir", "user_config_toml_path"]
 
 
 class Settings(BaseSettings):
     """Process-wide configuration.
 
-    Source precedence (later wins):
-    1. `~/.config/solisdash/.env` — the CLI writes first-run config here,
-       so installs from PyPI have a home for it.
-    2. `./.env` in the current directory — dev-checkout convention.
-    3. Process environment variables.
-
-    `settings_customise_sources` re-resolves `user_config_path()` on every
-    `Settings()` instantiation so tests can redirect via
+    `settings_customise_sources` re-resolves `user_config_toml_path()` on
+    every `Settings()` instantiation so tests can redirect via
     `XDG_CONFIG_HOME` / `HOME` without restarting the process.
     """
 
@@ -60,7 +52,9 @@ class Settings(BaseSettings):
             init_settings,
             env_settings,
             DotEnvSettingsSource(settings_cls, env_file=".env"),
-            DotEnvSettingsSource(settings_cls, env_file=str(user_config_path())),
+            TomlConfigSettingsSource(
+                settings_cls, toml_file=str(user_config_toml_path())
+            ),
             file_secret_settings,
         )
 
@@ -78,7 +72,7 @@ class Settings(BaseSettings):
     SESSION_SECRET: str = Field(default="", min_length=0)
 
     # Scheduler — off by default so tests and CI never poll SolisCloud.
-    # Production opts in via `RUN_SCHEDULER=true` in `.env`.
+    # Production opts in via `RUN_SCHEDULER=true` in the toml / env.
     RUN_SCHEDULER: bool = False
     SCHEDULER_SAMPLE_MINUTES: int = 5
     SCHEDULER_DAILY_HOUR_UTC: int = 0

@@ -32,6 +32,7 @@ from solisdash.auth import (
 )
 from solisdash.client import SolisAPIError, SolisClient
 from solisdash.config import get_settings
+from solisdash.configfile import delete_toml, user_config_toml_path, write_toml
 from solisdash.db import ensure_indexes
 from solisdash.history import HistoryService, Series, parse_month
 from solisdash.poller import Poller
@@ -340,72 +341,222 @@ async def tiles_fragment(
     )
 
 
-async def _users_exist(db: AsyncDatabase[dict[str, Any]]) -> bool:
-    """True once any user has been created. The setup wizard is locked
-    behind this — once a user exists, `/setup` returns to `/login` forever."""
-    return await db["users"].count_documents({}, limit=1) > 0
+async def _users_exist_in(uri: str, db_name: str) -> bool:
+    """Count documents in `users` for an arbitrary URI. Returns False on failure."""
+    client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(uri, serverSelectionTimeoutMS=2000)
+    try:
+        return await client[db_name]["users"].count_documents({}, limit=1) > 0
+    except Exception:
+        return False
+    finally:
+        await client.close()
+
+
+async def _setup_done() -> bool:
+    """True once Mongo is configured AND there's at least one user."""
+    settings = get_settings()
+    if not settings.SOLIS_MONGODB_URI:
+        return False
+    return await _users_exist_in(settings.SOLIS_MONGODB_URI, settings.SOLIS_MONGODB_DB)
+
+
+def _setup_defaults() -> dict[str, str]:
+    """Current settings rendered as form defaults for the wizard / settings page."""
+    s = get_settings()
+    return {
+        "SOLIS_MONGODB_URI": s.SOLIS_MONGODB_URI or "mongodb://localhost:27017/",
+        "SOLIS_MONGODB_DB": s.SOLIS_MONGODB_DB or "solis",
+        "SOLIS_API_URL": s.SOLIS_API_URL,
+        "SOLIS_KEY_ID": s.SOLIS_KEY_ID,
+        # Never echo the secret back to the page — admin re-enters if changing.
+        "SOLIS_KEYSECRET_PRESENT": "yes" if s.SOLIS_KEYSECRET else "",
+        "SOLIS_STATION_ID": s.SOLIS_STATION_ID,
+    }
+
+
+async def _invalidate_clients(app: FastAPI) -> None:
+    """Close cached Mongo / SolisCloud clients so the next request re-creates
+    them against any settings we just persisted."""
+    mongo: AsyncMongoClient[dict[str, Any]] | None = getattr(
+        app.state, "mongo_client", None
+    )
+    if mongo is not None:
+        await mongo.close()
+    solis: SolisClient | None = getattr(app.state, "solis_client", None)
+    if solis is not None:
+        await solis.aclose()
+    app.state.mongo_client = None
+    app.state.solis_client = None
+    app.state.tiles_service = None
 
 
 @app.get("/login", response_class=HTMLResponse, response_model=None)
 async def login_form(
     request: Request,
     user: dict[str, Any] | None = Depends(get_current_user),
-    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
     if user is not None:
         return redirect_to("/")
-    if not await _users_exist(db):
+    if not await _setup_done():
         return redirect_to("/setup")
     return templates.TemplateResponse(request, "login.html", {"error": None})
+
+
+# --- First-run setup wizard ------------------------------------------------
 
 
 @app.get("/setup", response_class=HTMLResponse, response_model=None)
 async def setup_form(
     request: Request,
-    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
-    """First-run admin-creation wizard. Locked once any account exists."""
-    if await _users_exist(db):
+    """First-run wizard: MongoDB + SolisCloud + admin account on one page."""
+    if await _setup_done():
         return redirect_to("/login")
     return templates.TemplateResponse(
-        request, "setup.html", {"error": None, "username": ""}
+        request,
+        "setup.html",
+        {"error": None, "username": "", "defaults": _setup_defaults()},
+    )
+
+
+@app.post("/setup/test/mongo", response_class=HTMLResponse, response_model=None)
+async def setup_test_mongo(
+    mongo_uri: str = Form(...),
+    mongo_db: str = Form("solis"),
+) -> HTMLResponse:
+    """HTMX endpoint — try to connect to the URI the form is currently holding."""
+    try:
+        client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+            mongo_uri, serverSelectionTimeoutMS=4000
+        )
+        try:
+            await client[mongo_db].command("ping")
+        finally:
+            await client.close()
+    except Exception as exc:
+        return HTMLResponse(
+            f'<p class="test-result error">✗ MongoDB connection failed: '
+            f"{type(exc).__name__}: {exc}</p>",
+            status_code=200,
+        )
+    return HTMLResponse(
+        f'<p class="test-result success">✓ Connected to MongoDB at '
+        f"<code>{mongo_uri}</code>.</p>"
+    )
+
+
+@app.post("/setup/test/soliscloud", response_class=HTMLResponse, response_model=None)
+async def setup_test_soliscloud(
+    solis_api_url: str = Form(...),
+    solis_key_id: str = Form(""),
+    solis_keysecret: str = Form(""),
+) -> HTMLResponse:
+    """HTMX endpoint — sign a probe `userStationList` call with the supplied creds."""
+    if not solis_key_id or not solis_keysecret:
+        return HTMLResponse(
+            '<p class="test-result error">✗ Enter both Key ID and Key Secret '
+            "before testing.</p>",
+            status_code=200,
+        )
+    try:
+        async with SolisClient(
+            base_url=solis_api_url,
+            key_id=solis_key_id,
+            key_secret=solis_keysecret,
+            max_retries=0,
+        ) as c:
+            page = await c.user_station_list(page_no=1, page_size=1)
+    except SolisAPIError as exc:
+        return HTMLResponse(
+            f'<p class="test-result error">✗ SolisCloud rejected the call: '
+            f"[{exc.code}] {exc.msg}</p>"
+        )
+    except Exception as exc:
+        return HTMLResponse(
+            f'<p class="test-result error">✗ Could not reach SolisCloud: '
+            f"{type(exc).__name__}: {exc}</p>"
+        )
+    return HTMLResponse(
+        f'<p class="test-result success">✓ SolisCloud accepted the credentials '
+        f"({page.total} station(s) on the account).</p>"
     )
 
 
 @app.post("/setup", response_class=HTMLResponse, response_model=None)
 async def setup_submit(
     request: Request,
+    mongo_uri: str = Form(...),
+    mongo_db: str = Form("solis"),
+    solis_api_url: str = Form(""),
+    solis_key_id: str = Form(""),
+    solis_keysecret: str = Form(""),
     username: str = Form(...),
     password: str = Form(...),
     confirm: str = Form(...),
-    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
-    if await _users_exist(db):
-        # Race or replay — someone else already created the first user.
+    """Validate, persist to toml, create the first admin, sign in."""
+    import secrets
+
+    def _err(msg: str, **extras: str) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "setup.html",
+            {
+                "error": msg,
+                "username": username,
+                "defaults": {**_setup_defaults(), **extras},
+            },
+            status_code=400,
+        )
+
+    if await _setup_done():
         return redirect_to("/login")
+    if not mongo_uri.strip():
+        return _err("MongoDB URI is required.")
     if not username.strip():
-        return templates.TemplateResponse(
-            request,
-            "setup.html",
-            {"error": "Username must not be empty.", "username": username},
-            status_code=400,
-        )
+        return _err("Username must not be empty.")
     if password != confirm:
-        return templates.TemplateResponse(
-            request,
-            "setup.html",
-            {"error": "Passwords do not match.", "username": username},
-            status_code=400,
-        )
+        return _err("Passwords do not match.")
     if not password:
-        return templates.TemplateResponse(
-            request,
-            "setup.html",
-            {"error": "Password must not be empty.", "username": username},
-            status_code=400,
+        return _err("Password must not be empty.")
+
+    # Verify the supplied URI works before we persist anything.
+    try:
+        probe: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+            mongo_uri, serverSelectionTimeoutMS=4000
         )
-    await create_user(db, username=username.strip(), password=password, role="admin")
-    return redirect_to("/login")
+        try:
+            await probe[mongo_db].command("ping")
+        finally:
+            await probe.close()
+    except Exception as exc:
+        return _err(f"MongoDB connection failed: {type(exc).__name__}: {exc}")
+
+    # Persist everything that's non-empty.
+    settings = get_settings()
+    write_toml(
+        {
+            "SOLIS_MONGODB_URI": mongo_uri.strip(),
+            "SOLIS_MONGODB_DB": mongo_db.strip() or "solis",
+            "SOLIS_API_URL": solis_api_url.strip() or settings.SOLIS_API_URL,
+            "SOLIS_KEY_ID": solis_key_id.strip(),
+            "SOLIS_KEYSECRET": solis_keysecret,
+            "SESSION_SECRET": settings.SESSION_SECRET or secrets.token_urlsafe(32),
+        }
+    )
+    get_settings.cache_clear()
+    await _invalidate_clients(request.app)
+
+    # Create the first admin in the freshly-configured Mongo.
+    db = await get_db(request)
+    await ensure_indexes(db)
+    await create_user(
+        db, username=username.strip(), password=password, role="admin"
+    )
+
+    # Auto-sign-in — saves the user re-typing the password they just chose.
+    session_login(request, {"username": username.strip(), "role": "admin"})
+    return redirect_to("/")
 
 
 @app.post("/login", response_class=HTMLResponse, response_model=None)
@@ -431,6 +582,105 @@ async def login_submit(
 async def logout(request: Request) -> RedirectResponse:
     session_logout(request)
     return redirect_to("/login")
+
+
+# --- Settings page ---------------------------------------------------------
+
+
+@app.get("/settings", response_class=HTMLResponse, response_model=None)
+async def settings_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_user),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "user": user,
+            "config_path": str(user_config_toml_path()),
+            "defaults": _setup_defaults(),
+            "error": None,
+            "saved": False,
+        },
+    )
+
+
+@app.post("/settings/save", response_class=HTMLResponse, response_model=None)
+async def settings_save(
+    request: Request,
+    mongo_uri: str = Form(...),
+    mongo_db: str = Form("solis"),
+    solis_api_url: str = Form(""),
+    solis_key_id: str = Form(""),
+    solis_keysecret: str = Form(""),
+    solis_station_id: str = Form(""),
+    user: dict[str, Any] = Depends(require_user),
+) -> HTMLResponse | RedirectResponse:
+    """Persist edited settings to `solisdash.toml`, invalidate cached clients."""
+    settings = get_settings()
+    updates: dict[str, Any] = {
+        "SOLIS_MONGODB_URI": mongo_uri.strip(),
+        "SOLIS_MONGODB_DB": mongo_db.strip() or "solis",
+        "SOLIS_API_URL": solis_api_url.strip() or settings.SOLIS_API_URL,
+        "SOLIS_KEY_ID": solis_key_id.strip(),
+        "SOLIS_STATION_ID": solis_station_id.strip(),
+    }
+    # Only overwrite the secret if the user actually entered a new one.
+    if solis_keysecret:
+        updates["SOLIS_KEYSECRET"] = solis_keysecret
+
+    write_toml(updates)
+    get_settings.cache_clear()
+    await _invalidate_clients(request.app)
+
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "user": user,
+            "config_path": str(user_config_toml_path()),
+            "defaults": _setup_defaults(),
+            "error": None,
+            "saved": True,
+        },
+    )
+
+
+@app.post("/settings/test/mongo", response_class=HTMLResponse, response_model=None)
+async def settings_test_mongo(
+    mongo_uri: str = Form(...),
+    mongo_db: str = Form("solis"),
+    user: dict[str, Any] = Depends(require_user),
+) -> HTMLResponse:
+    return await setup_test_mongo(mongo_uri=mongo_uri, mongo_db=mongo_db)
+
+
+@app.post("/settings/test/soliscloud", response_class=HTMLResponse, response_model=None)
+async def settings_test_soliscloud(
+    solis_api_url: str = Form(...),
+    solis_key_id: str = Form(""),
+    solis_keysecret: str = Form(""),
+    user: dict[str, Any] = Depends(require_user),
+) -> HTMLResponse:
+    return await setup_test_soliscloud(
+        solis_api_url=solis_api_url,
+        solis_key_id=solis_key_id,
+        solis_keysecret=solis_keysecret,
+    )
+
+
+@app.post("/settings/reset", response_model=None)
+async def settings_reset(
+    request: Request,
+    user: dict[str, Any] = Depends(require_user),
+) -> RedirectResponse:
+    """Wipe `solisdash.toml`, clear cached clients + session, send the user
+    back through the first-run wizard."""
+    delete_toml()
+    get_settings.cache_clear()
+    await _invalidate_clients(request.app)
+    session_logout(request)
+    return redirect_to("/setup")
 
 
 # --- History page -----------------------------------------------------------

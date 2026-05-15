@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Settings · Solisdash{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Settings</h2>
+  <p>
+    Saved to <code>{{ config_path }}</code>.
+    Environment variables (<code>SOLIS_*</code>, <code>SESSION_SECRET</code>)
+    still take precedence over what's written here.
+  </p>
+</hgroup>
+
+{% if saved %}
+  <p class="test-result success">✓ Settings saved. Cached connections were reset; the next request uses the new values.</p>
+{% endif %}
+{% if error %}
+  <p role="alert" class="error">{{ error }}</p>
+{% endif %}
+
+<form method="post" action="/settings/save">
+  <article>
+    <header><strong>MongoDB</strong></header>
+    <label for="mongo_uri">Connection URI</label>
+    <input
+      id="mongo_uri"
+      name="mongo_uri"
+      type="text"
+      required
+      value="{{ defaults.SOLIS_MONGODB_URI }}"
+    />
+    <label for="mongo_db">Database name</label>
+    <input id="mongo_db" name="mongo_db" type="text" value="{{ defaults.SOLIS_MONGODB_DB }}" />
+    <button
+      type="button"
+      class="secondary outline"
+      hx-post="/settings/test/mongo"
+      hx-include="[name='mongo_uri'],[name='mongo_db']"
+      hx-target="#mongo_test_result"
+      hx-swap="innerHTML"
+    >Test connection</button>
+    <div id="mongo_test_result" class="test-slot"></div>
+  </article>
+
+  <article>
+    <header><strong>SolisCloud</strong></header>
+    <label for="solis_api_url">API URL</label>
+    <input id="solis_api_url" name="solis_api_url" type="text" value="{{ defaults.SOLIS_API_URL }}" />
+    <label for="solis_key_id">Key ID</label>
+    <input id="solis_key_id" name="solis_key_id" type="text" value="{{ defaults.SOLIS_KEY_ID }}" />
+    <label for="solis_keysecret">Key Secret
+      {% if defaults.SOLIS_KEYSECRET_PRESENT %}
+        <small class="muted">(stored; leave blank to keep)</small>
+      {% endif %}
+    </label>
+    <input id="solis_keysecret" name="solis_keysecret" type="password" autocomplete="new-password" />
+    <label for="solis_station_id">Station ID (optional pin)</label>
+    <input id="solis_station_id" name="solis_station_id" type="text" value="{{ defaults.SOLIS_STATION_ID }}" />
+    <button
+      type="button"
+      class="secondary outline"
+      hx-post="/settings/test/soliscloud"
+      hx-include="[name='solis_api_url'],[name='solis_key_id'],[name='solis_keysecret']"
+      hx-target="#solis_test_result"
+      hx-swap="innerHTML"
+    >Test SolisCloud</button>
+    <div id="solis_test_result" class="test-slot"></div>
+  </article>
+
+  <button type="submit">Save changes</button>
+</form>
+
+<article class="danger-zone">
+  <header><strong>Reset configuration</strong></header>
+  <p>
+    Wipes <code>{{ config_path }}</code> and signs you out. The next request
+    runs the first-run wizard again. Your MongoDB data (users, samples, alarms,
+    daily totals) is left alone.
+  </p>
+  <form method="post" action="/settings/reset"
+        onsubmit="return confirm('Delete solisdash.toml and re-run the setup wizard?')">
+    <button type="submit" class="secondary outline">Reset configuration</button>
+  </form>
+</article>
+{% endblock %}

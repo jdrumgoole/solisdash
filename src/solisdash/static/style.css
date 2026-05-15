@@ -77,3 +77,43 @@ p[role="alert"].error {
   border-radius: var(--pico-border-radius);
   margin-block-end: 0.75rem;
 }
+
+/* Setup wizard + Settings page test results */
+.test-slot {
+  min-height: 1.5rem;
+  margin-block: 0.25rem 0.75rem;
+}
+
+.test-result {
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--pico-border-radius);
+  margin: 0;
+}
+
+.test-result.success {
+  color: #166534;
+  background: color-mix(in srgb, #22c55e 18%, transparent);
+}
+
+.test-result.error {
+  color: var(--pico-form-element-invalid-active-border-color);
+  background: color-mix(
+    in srgb,
+    var(--pico-form-element-invalid-active-border-color) 14%,
+    transparent
+  );
+}
+
+.danger-zone {
+  border-color: color-mix(
+    in srgb,
+    var(--pico-form-element-invalid-active-border-color) 50%,
+    transparent
+  );
+}
+
+.muted {
+  color: var(--pico-muted-color);
+  font-weight: normal;
+  margin-left: 0.25rem;
+}

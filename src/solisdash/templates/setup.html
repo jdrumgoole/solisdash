@@ -1,21 +1,100 @@
 {% extends "base.html" %}
 {% block title %}Welcome · Solisdash{% endblock %}
 {% block content %}
-<article class="login-card">
-  <hgroup>
-    <h2>Welcome to Solisdash</h2>
+<hgroup>
+  <h2>Welcome to Solisdash</h2>
+  <p>
+    No setup found. Tell Solisdash where MongoDB lives and how to reach
+    SolisCloud, then create the first administrator. Each section has a
+    <kbd>Test</kbd> button so you can confirm the values before saving.
+  </p>
+</hgroup>
+
+{% if error %}
+  <p role="alert" class="error">{{ error }}</p>
+{% endif %}
+
+<form method="post" action="/setup">
+  <article>
+    <header><strong>1. MongoDB</strong></header>
     <p>
-      No accounts exist yet. Create the first administrator below.
-      This page is shown only on a fresh install — once any account
-      exists, it stops working.
+      Where Solisdash will store users, samples, alarms, and daily totals.
+      A local <code>mongod</code> works for single-user setups; use an
+      Atlas <code>mongodb+srv://…</code> URI for hosted Mongo.
     </p>
-  </hgroup>
+    <label for="mongo_uri">Connection URI</label>
+    <input
+      id="mongo_uri"
+      name="mongo_uri"
+      type="text"
+      required
+      value="{{ defaults.SOLIS_MONGODB_URI or 'mongodb://localhost:27017/' }}"
+    />
+    <label for="mongo_db">Database name</label>
+    <input
+      id="mongo_db"
+      name="mongo_db"
+      type="text"
+      value="{{ defaults.SOLIS_MONGODB_DB or 'solis' }}"
+    />
+    <button
+      type="button"
+      class="secondary outline"
+      hx-post="/setup/test/mongo"
+      hx-include="[name='mongo_uri'],[name='mongo_db']"
+      hx-target="#mongo_test_result"
+      hx-swap="innerHTML"
+    >Test connection</button>
+    <div id="mongo_test_result" class="test-slot"></div>
+  </article>
 
-  {% if error %}
-    <p role="alert" class="error">{{ error }}</p>
-  {% endif %}
+  <article>
+    <header><strong>2. SolisCloud</strong></header>
+    <p>
+      The API credentials issued by SolisCloud
+      (Account → "API Management"). Solisdash signs every call with
+      these. You can fill these in later if you don't have them yet —
+      the dashboard will boot and you can finish in
+      <a href="/settings">Settings</a>.
+    </p>
+    <label for="solis_api_url">API URL</label>
+    <input
+      id="solis_api_url"
+      name="solis_api_url"
+      type="text"
+      value="{{ defaults.SOLIS_API_URL or 'https://www.soliscloud.com:13333' }}"
+    />
+    <label for="solis_key_id">Key ID</label>
+    <input
+      id="solis_key_id"
+      name="solis_key_id"
+      type="text"
+      value="{{ defaults.SOLIS_KEY_ID or '' }}"
+    />
+    <label for="solis_keysecret">Key Secret</label>
+    <input
+      id="solis_keysecret"
+      name="solis_keysecret"
+      type="password"
+      autocomplete="new-password"
+    />
+    <button
+      type="button"
+      class="secondary outline"
+      hx-post="/setup/test/soliscloud"
+      hx-include="[name='solis_api_url'],[name='solis_key_id'],[name='solis_keysecret']"
+      hx-target="#solis_test_result"
+      hx-swap="innerHTML"
+    >Test SolisCloud</button>
+    <div id="solis_test_result" class="test-slot"></div>
+  </article>
 
-  <form method="post" action="/setup">
+  <article>
+    <header><strong>3. Administrator account</strong></header>
+    <p>
+      The first sign-in account. After saving, you'll be signed in
+      automatically and dropped on the dashboard.
+    </p>
     <label for="username">Username</label>
     <input
       id="username"
@@ -24,9 +103,7 @@
       autocomplete="username"
       value="{{ username|default('') }}"
       required
-      autofocus
     />
-
     <label for="password">Password</label>
     <input
       id="password"
@@ -35,7 +112,6 @@
       autocomplete="new-password"
       required
     />
-
     <label for="confirm">Confirm password</label>
     <input
       id="confirm"
@@ -44,8 +120,8 @@
       autocomplete="new-password"
       required
     />
+  </article>
 
-    <button type="submit">Create administrator</button>
-  </form>
-</article>
+  <button type="submit">Save and sign in</button>
+</form>
 {% endblock %}
