@@ -254,6 +254,50 @@ async def test_setup_post_rejects_unreachable_mongo(
     assert "MongoDB connection failed" in r.text
 
 
+async def test_setup_post_rejects_existing_username_in_target_db(
+    auth_client: httpx.AsyncClient,
+    clean_db: AsyncDatabase[dict[str, Any]],
+    mongo_uri: str,
+    test_db_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """Pointing the wizard at a DB that already has the chosen username
+    must render a friendly error, not blow up with DuplicateKeyError."""
+
+    async def _not_done() -> bool:
+        return False
+
+    monkeypatch.setattr(app_module, "_setup_done", _not_done)
+    # Keep any toml writes off the user's real home directory.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    # Seed the target DB with a user the form will collide with.
+    await create_user(clean_db, username="jdrumgoole", password="x", role="admin")
+
+    r = await auth_client.post(
+        "/setup",
+        data={
+            "mongo_uri": mongo_uri,
+            "mongo_db": test_db_name,
+            "solis_api_url": "https://api/",
+            "solis_key_id": "",
+            "solis_keysecret": "",
+            "username": "jdrumgoole",
+            "password": "hunter2",
+            "confirm": "hunter2",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
+    assert "already exists" in r.text
+    assert "jdrumgoole" in r.text
+    # Pre-check fires before write_toml, so the toml was not written.
+    assert not (tmp_path / "solisdash" / "solisdash.toml").exists()
+    # And the seeded user remains untouched.
+    assert await clean_db["users"].count_documents({"username": "jdrumgoole"}) == 1
+
+
 # --- /settings page -------------------------------------------------------
 
 

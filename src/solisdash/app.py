@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pymongo import AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
+from pymongo.errors import DuplicateKeyError
 from starlette.middleware.sessions import SessionMiddleware
 
 from solisdash import __version__
@@ -520,24 +521,42 @@ async def setup_submit(
     if not password:
         return _err("Password must not be empty.")
 
-    # Verify the supplied URI works before we persist anything.
+    target_uri = mongo_uri.strip()
+    target_db = mongo_db.strip() or "solis"
+    target_username = username.strip()
+
+    # Verify the supplied URI works AND check for a username collision
+    # *before* we persist anything. Without this guard, pointing the wizard
+    # at an already-populated database (e.g. recovering after losing the
+    # local toml) raises DuplicateKeyError as a 500 once we hit the index.
     try:
         probe: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
-            mongo_uri, serverSelectionTimeoutMS=4000
+            target_uri, serverSelectionTimeoutMS=4000
         )
         try:
-            await probe[mongo_db].command("ping")
+            probe_db = probe[target_db]
+            await probe_db.command("ping")
+            collision = await probe_db["users"].find_one(
+                {"username": target_username}, projection={"_id": 1}
+            )
         finally:
             await probe.close()
     except Exception as exc:
         return _err(f"MongoDB connection failed: {type(exc).__name__}: {exc}")
 
+    if collision is not None:
+        return _err(
+            f"A user named “{target_username}” already exists in this database. "
+            "Pick a different username, or sign in to the existing account "
+            "from the /login page after saving."
+        )
+
     # Persist everything that's non-empty.
     settings = get_settings()
     write_toml(
         {
-            "SOLIS_MONGODB_URI": mongo_uri.strip(),
-            "SOLIS_MONGODB_DB": mongo_db.strip() or "solis",
+            "SOLIS_MONGODB_URI": target_uri,
+            "SOLIS_MONGODB_DB": target_db,
             "SOLIS_API_URL": solis_api_url.strip() or settings.SOLIS_API_URL,
             "SOLIS_KEY_ID": solis_key_id.strip(),
             "SOLIS_KEYSECRET": solis_keysecret,
@@ -550,12 +569,19 @@ async def setup_submit(
     # Create the first admin in the freshly-configured Mongo.
     db = await get_db(request)
     await ensure_indexes(db)
-    await create_user(
-        db, username=username.strip(), password=password, role="admin"
-    )
+    try:
+        await create_user(db, username=target_username, password=password, role="admin")
+    except DuplicateKeyError:
+        # Pre-check above usually catches this; the index also enforces it,
+        # so handle the race anyway rather than 500ing.
+        return _err(
+            f"A user named “{target_username}” already exists in this database. "
+            "Pick a different username, or sign in to the existing account "
+            "from the /login page."
+        )
 
     # Auto-sign-in — saves the user re-typing the password they just chose.
-    session_login(request, {"username": username.strip(), "role": "admin"})
+    session_login(request, {"username": target_username, "role": "admin"})
     return redirect_to("/")
 
 
