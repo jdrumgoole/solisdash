@@ -127,22 +127,33 @@ def test_apply_env_updates_os_environ_and_clears_settings_cache(
 def _isolated_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Path]:
-    """Isolated config: tmp XDG_CONFIG_HOME, tmp cwd (no project .env), env cleared."""
-    cwd = tmp_path / "cwd"
-    cwd.mkdir()
-    monkeypatch.chdir(cwd)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    for k in (
+    """Isolated config: tmp XDG_CONFIG_HOME, tmp cwd (no project .env), env cleared.
+
+    Teardown explicitly pops env vars again — `_apply_env` and
+    `interactive_setup` write directly to `os.environ` outside monkeypatch's
+    tracking, so without this pop() they leak into the next test in the
+    same xdist worker.
+    """
+    leaking_keys = (
         "SOLIS_MONGODB_URI",
         "SOLIS_KEY_ID",
         "SOLIS_KEYSECRET",
         "SOLIS_API_URL",
         "SESSION_SECRET",
-    ):
+    )
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    for k in leaking_keys:
         monkeypatch.delenv(k, raising=False)
     get_settings.cache_clear()
-    yield user_config_path()
-    get_settings.cache_clear()
+    try:
+        yield user_config_path()
+    finally:
+        for k in leaking_keys:
+            os.environ.pop(k, None)
+        get_settings.cache_clear()
 
 
 def test_interactive_setup_skips_when_mongo_already_set(

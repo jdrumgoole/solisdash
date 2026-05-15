@@ -142,11 +142,16 @@ async def get_db(request: Request) -> AsyncDatabase[dict[str, Any]]:
 
 
 async def get_solis_client(request: Request) -> SolisClient:
-    """Lazily open one shared `SolisClient`. Closed on app shutdown."""
+    """Lazily open one shared `SolisClient`. Closed on app shutdown.
+
+    The client is built even with empty key/secret so a freshly-installed
+    instance with no SolisCloud configuration doesn't 500 on every
+    protected page. Empty creds cause SolisCloud to reject the call,
+    which `_resolve_tiles` catches and renders as a friendly alert
+    ("SolisCloud rejected the call: …" — visible nudge to configure).
+    """
     if request.app.state.solis_client is None:
         settings = get_settings()
-        if not settings.SOLIS_KEY_ID or not settings.SOLIS_KEYSECRET:
-            raise RuntimeError("SOLIS_KEY_ID / SOLIS_KEYSECRET not configured")
         request.app.state.solis_client = SolisClient(
             base_url=settings.SOLIS_API_URL,
             key_id=settings.SOLIS_KEY_ID,

@@ -7,7 +7,12 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 
 def user_config_dir() -> Path:
@@ -26,19 +31,38 @@ def user_config_path() -> Path:
 
 
 class Settings(BaseSettings):
-    """Process-wide configuration. Read from environment or `.env`.
+    """Process-wide configuration.
 
-    Two `.env` files are honoured, with the second overriding the first:
-
+    Source precedence (later wins):
     1. `~/.config/solisdash/.env` — the CLI writes first-run config here,
        so installs from PyPI have a home for it.
     2. `./.env` in the current directory — dev-checkout convention.
+    3. Process environment variables.
+
+    `settings_customise_sources` re-resolves `user_config_path()` on every
+    `Settings()` instantiation so tests can redirect via
+    `XDG_CONFIG_HOME` / `HOME` without restarting the process.
     """
 
-    model_config = SettingsConfigDict(
-        env_file=(str(user_config_path()), ".env"),
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # pydantic-settings v2: earlier sources in this tuple win.
+        return (
+            init_settings,
+            env_settings,
+            DotEnvSettingsSource(settings_cls, env_file=".env"),
+            DotEnvSettingsSource(settings_cls, env_file=str(user_config_path())),
+            file_secret_settings,
+        )
 
     # SolisCloud
     SOLIS_KEY_ID: str = ""
