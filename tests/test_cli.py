@@ -47,6 +47,37 @@ def test_parse_args_supports_flags() -> None:
     assert args.debug is True
 
 
+def test_parse_args_default_command_is_none() -> None:
+    """Bare `solisdash` dispatches to the run command."""
+    args = parse_args([])
+    assert args.command is None
+
+
+def test_parse_args_run_subcommand_accepts_run_flags() -> None:
+    args = parse_args(["run", "--port", "9100"])
+    assert args.command == "run"
+    assert args.port == 9100
+
+
+def test_parse_args_add_user_subcommand() -> None:
+    args = parse_args(["add-user", "--username", "joe", "--role", "admin"])
+    assert args.command == "add-user"
+    assert args.username == "joe"
+    assert args.role == "admin"
+
+
+def test_parse_args_add_user_defaults_role_to_user() -> None:
+    args = parse_args(["add-user", "--username", "joe"])
+    assert args.role == "user"
+
+
+def test_parse_args_add_user_rejects_unknown_role() -> None:
+    import pytest as _pytest
+
+    with _pytest.raises(SystemExit):
+        parse_args(["add-user", "--username", "joe", "--role", "wizard"])
+
+
 # --- health waiter against a stand-in HTTP server -------------------------
 
 

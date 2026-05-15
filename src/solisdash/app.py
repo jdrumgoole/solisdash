@@ -23,6 +23,7 @@ from solisdash import __version__
 from solisdash.alarms import ALARM_STATE_LABELS, AlarmService
 from solisdash.auth import (
     authenticate,
+    create_user,
     get_current_user,
     redirect_to,
     require_user,
@@ -334,14 +335,72 @@ async def tiles_fragment(
     )
 
 
+async def _users_exist(db: AsyncDatabase[dict[str, Any]]) -> bool:
+    """True once any user has been created. The setup wizard is locked
+    behind this — once a user exists, `/setup` returns to `/login` forever."""
+    return await db["users"].count_documents({}, limit=1) > 0
+
+
 @app.get("/login", response_class=HTMLResponse, response_model=None)
 async def login_form(
     request: Request,
     user: dict[str, Any] | None = Depends(get_current_user),
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
     if user is not None:
         return redirect_to("/")
+    if not await _users_exist(db):
+        return redirect_to("/setup")
     return templates.TemplateResponse(request, "login.html", {"error": None})
+
+
+@app.get("/setup", response_class=HTMLResponse, response_model=None)
+async def setup_form(
+    request: Request,
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+) -> HTMLResponse | RedirectResponse:
+    """First-run admin-creation wizard. Locked once any account exists."""
+    if await _users_exist(db):
+        return redirect_to("/login")
+    return templates.TemplateResponse(
+        request, "setup.html", {"error": None, "username": ""}
+    )
+
+
+@app.post("/setup", response_class=HTMLResponse, response_model=None)
+async def setup_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    confirm: str = Form(...),
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+) -> HTMLResponse | RedirectResponse:
+    if await _users_exist(db):
+        # Race or replay — someone else already created the first user.
+        return redirect_to("/login")
+    if not username.strip():
+        return templates.TemplateResponse(
+            request,
+            "setup.html",
+            {"error": "Username must not be empty.", "username": username},
+            status_code=400,
+        )
+    if password != confirm:
+        return templates.TemplateResponse(
+            request,
+            "setup.html",
+            {"error": "Passwords do not match.", "username": username},
+            status_code=400,
+        )
+    if not password:
+        return templates.TemplateResponse(
+            request,
+            "setup.html",
+            {"error": "Password must not be empty.", "username": username},
+            status_code=400,
+        )
+    await create_user(db, username=username.strip(), password=password, role="admin")
+    return redirect_to("/login")
 
 
 @app.post("/login", response_class=HTMLResponse, response_model=None)

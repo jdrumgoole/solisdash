@@ -1,21 +1,26 @@
-"""`solisdash` CLI: run the FastAPI app inside a native pywebview window.
+"""`solisdash` CLI: run the dashboard, or manage users.
 
-The CLI is for "desktop app" runs on the developer's machine. For a
-real deployment use `uv run python -m invoke start`; for tests use
-`pytest`. This entry point keeps the same FastAPI app, just hides
-the browser shell behind a Cocoa/GTK/EdgeWebView2 window with a
-native menu and the sun icon.
+Subcommands:
+- (no subcommand) / `run` — open the dashboard inside a pywebview window
+- `add-user`             — seed an account (the only path before login works)
+
+Both end up calling the same `solisdash.app` and `solisdash.auth` code that
+`uv run python -m invoke …` uses; they're just here so anyone who installed
+the package from PyPI doesn't need a dev checkout to bootstrap.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import getpass
 import logging
 import socket
 import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from importlib.resources import files
 from pathlib import Path
 
@@ -173,48 +178,10 @@ def launch_webview(base_url: str, *, debug: bool = False) -> None:
     webview.start(**start_kwargs)  # type: ignore[arg-type]
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="solisdash",
-        description="Run Solisdash inside a native window (pywebview).",
-    )
-    parser.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="Address uvicorn binds to. Default: 127.0.0.1 (loopback only).",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=0,
-        help="Port to bind. 0 (default) picks a free one.",
-    )
-    parser.add_argument(
-        "--no-window",
-        action="store_true",
-        help="Run uvicorn without opening pywebview (useful for ssh / headless smoke).",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Open pywebview's dev tools and use uvicorn debug logging.",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"solisdash {__version__}",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=float,
-        default=15.0,
-        help="Seconds to wait for the app to become healthy before giving up.",
-    )
-    return parser.parse_args(argv)
+# --- subcommand: run -------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+def cmd_run(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -246,6 +213,162 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         server.stop()
     return 0
+
+
+# --- subcommand: add-user --------------------------------------------------
+
+
+def _prompt_password(getpass_fn: Callable[[str], str] = getpass.getpass) -> str | None:
+    """Prompt for a password twice; return the value or `None` on mismatch/empty.
+
+    Indirection on `getpass.getpass` is so tests can inject a stub.
+    """
+    pw1 = getpass_fn("Password: ")
+    pw2 = getpass_fn("Confirm:  ")
+    if pw1 != pw2:
+        print("passwords do not match", file=sys.stderr)
+        return None
+    if not pw1:
+        print("password must not be empty", file=sys.stderr)
+        return None
+    return pw1
+
+
+def cmd_add_user(args: argparse.Namespace) -> int:
+    """Create a user in the configured Mongo. Prompts for the password."""
+    from pymongo import AsyncMongoClient
+    from pymongo.errors import DuplicateKeyError
+
+    from solisdash.auth import ROLES, create_user
+    from solisdash.config import get_settings
+    from solisdash.db import ensure_indexes
+
+    if args.role not in ROLES:
+        print(f"role must be one of {ROLES}, got {args.role!r}", file=sys.stderr)
+        return 2
+
+    settings = get_settings()
+    if not settings.SOLIS_MONGODB_URI:
+        print("SOLIS_MONGODB_URI is not set", file=sys.stderr)
+        return 2
+
+    password = _prompt_password()
+    if password is None:
+        return 2
+
+    async def _go() -> int:
+        client: AsyncMongoClient[dict[str, object]] = AsyncMongoClient(
+            settings.SOLIS_MONGODB_URI
+        )
+        try:
+            db = client[settings.SOLIS_MONGODB_DB]
+            await ensure_indexes(db)
+            try:
+                await create_user(
+                    db, username=args.username, password=password, role=args.role
+                )
+            except DuplicateKeyError:
+                print(f"user {args.username!r} already exists", file=sys.stderr)
+                return 1
+            print(f"created {args.role} {args.username!r}")
+            return 0
+        finally:
+            await client.close()
+
+    return asyncio.run(_go())
+
+
+# --- argparse plumbing -----------------------------------------------------
+
+
+def _add_run_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Address uvicorn binds to. Default: 127.0.0.1 (loopback only).",
+    )
+    p.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help="Port to bind. 0 (default) picks a free one.",
+    )
+    p.add_argument(
+        "--no-window",
+        action="store_true",
+        help="Run uvicorn without opening pywebview (useful for ssh / headless smoke).",
+    )
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="Open pywebview's dev tools and use uvicorn debug logging.",
+    )
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=15.0,
+        help="Seconds to wait for the app to become healthy before giving up.",
+    )
+
+
+def _make_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="solisdash",
+        description=(
+            "Solisdash CLI. With no subcommand, runs the dashboard in a "
+            "native pywebview window."
+        ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"solisdash {__version__}",
+    )
+    # The run-mode flags are also accepted at the top level so
+    # `solisdash --port 9000` keeps working without an explicit subcommand.
+    _add_run_args(parser)
+
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    run_p = subparsers.add_parser(
+        "run",
+        help="Run the dashboard in a pywebview window (default).",
+        description="Run the dashboard. Equivalent to `solisdash` with no subcommand.",
+    )
+    _add_run_args(run_p)
+
+    add_p = subparsers.add_parser(
+        "add-user",
+        help="Create a Solisdash account (prompts for password).",
+        description=(
+            "Create a Solisdash account in the configured MongoDB. Reads "
+            "SOLIS_MONGODB_URI from environment / .env. Prompts for the "
+            "password — it's never accepted on the command line."
+        ),
+    )
+    add_p.add_argument(
+        "--username", required=True, help="Username for the new account."
+    )
+    add_p.add_argument(
+        "--role",
+        default="user",
+        choices=("admin", "user"),
+        help="Account role (default: user).",
+    )
+
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return _make_parser().parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    if args.command == "add-user":
+        return cmd_add_user(args)
+    # Both `solisdash` and `solisdash run` end up here.
+    return cmd_run(args)
 
 
 if __name__ == "__main__":
