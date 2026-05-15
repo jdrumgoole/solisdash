@@ -79,4 +79,4 @@ CI runs the same against a `mongo:7` service container in GitHub Actions on ever
 
 ## License
 
-MIT.
+[GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later). Network use is distribution — if you run a modified version of Solisdash on a server users interact with, they're entitled to the modified source.

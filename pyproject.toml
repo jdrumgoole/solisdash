@@ -1,9 +1,11 @@
 [project]
 name = "solisdash"
-version = "0.2.2"
+version = "0.2.3"
 description = "Self-hosted dashboard for the SolisCloud platform"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{ name = "Joe Drumgoole", email = "joe@joedrumgoole.com" }]
 dependencies = [
     "fastapi>=0.115",
