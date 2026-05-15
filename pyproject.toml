@@ -1,6 +1,6 @@
 [project]
 name = "solisdash"
-version = "0.6.1"
+version = "0.6.2"
 description = "Self-hosted dashboard for the SolisCloud (Ginlong Solis) platform"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,7 +29,6 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "python-dotenv>=1.0",
-    "invoke>=2.2",
     "pymongo>=4.13",
     "bcrypt>=4.2",
     "itsdangerous>=2.2",
@@ -45,6 +44,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "tomli>=2",  # `tomllib` is stdlib from 3.11; install tomli everywhere for dev so the mypy ignore stays unconditional
+    "invoke>=2.2",  # only used by repo-root `tasks.py`, not shipped in the wheel
 ]
 
 [project.scripts]

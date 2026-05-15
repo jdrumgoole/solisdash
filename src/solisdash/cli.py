@@ -4,9 +4,8 @@ Subcommands:
 - (no subcommand) / `run` — open the dashboard inside a pywebview window
 - `add-user`             — seed an account (the only path before login works)
 
-Both end up calling the same `solisdash.app` and `solisdash.auth` code that
-`uv run python -m invoke …` uses; they're just here so anyone who installed
-the package from PyPI doesn't need a dev checkout to bootstrap.
+Pure-Python entry point installed by the wheel. No `uv` / `invoke` /
+external tooling at runtime — just `pip install solisdash && solisdash`.
 """
 
 from __future__ import annotations

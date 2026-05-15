@@ -1228,14 +1228,13 @@ wheels = [
 
 [[package]]
 name = "solisdash"
-version = "0.6.1"
+version = "0.6.2"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
     { name = "bcrypt" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "invoke" },
     { name = "itsdangerous" },
     { name = "jinja2" },
     { name = "pydantic" },
@@ -1249,6 +1248,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "invoke" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1263,7 +1263,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.2" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "invoke", specifier = ">=2.2" },
+    { name = "invoke", marker = "extra == 'dev'", specifier = ">=2.2" },
     { name = "itsdangerous", specifier = ">=2.2" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
