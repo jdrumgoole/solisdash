@@ -1,12 +1,22 @@
 [project]
 name = "solisdash"
-version = "0.3.0"
-description = "Self-hosted dashboard for the SolisCloud platform"
+version = "0.3.1"
+description = "Self-hosted dashboard for the SolisCloud (Ginlong Solis) platform"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "Joe Drumgoole", email = "joe@joedrumgoole.com" }]
+keywords = ["soliscloud", "ginlong-solis", "solar", "photovoltaic", "dashboard", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Home Automation",
+    "Topic :: Scientific/Engineering",
+]
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
@@ -40,8 +50,27 @@ solisdash = "solisdash.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[project.urls]
+Homepage = "https://github.com/jdrumgoole/solisdash"
+Repository = "https://github.com/jdrumgoole/solisdash"
+Issues = "https://github.com/jdrumgoole/solisdash/issues"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/solisdash"]
+
+[tool.hatch.build.targets.sdist]
+# Keep the sdist lean — the upstream PDF (~800kB) is reference material we
+# read during development, not something users of the package need.
+include = [
+    "/src",
+    "/pyproject.toml",
+    "/README.md",
+    "/LICENSE",
+    "/uv.lock",
+    "/tasks.py",
+    "/.python-version",
+    "/.env.example",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

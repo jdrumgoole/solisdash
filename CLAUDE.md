@@ -66,6 +66,12 @@ All Python invocations go through `uv run` — bare `pytest` / `invoke` can be i
 - `uv run python -m invoke lint` — ruff + mypy.
 - Single test: `uv run python -m pytest tests/test_smoke.py::test_health -q` (or pass `-k <expr>`).
 
+**Renamed the project directory?** `uv sync` rebuilds *packages* but does **not** regenerate the entry-point wrapper scripts in `.venv/bin/` — their shebangs are baked at install time. After any directory rename, run `rm -rf .venv && uv sync --extra dev` to get fresh shebangs; otherwise `uv run invoke …` and friends crash with `bad interpreter: No such file or directory`.
+
+## Releases
+
+Pushing a `vX.Y.Z` tag to `origin` triggers `.github/workflows/release.yml`, which builds with `uv build` and publishes the sdist + wheel to PyPI via OIDC trusted publishing — no API tokens, no local `uv publish`. The PyPI side needs `jdrumgoole/solisdash` registered as a trusted publisher pointing at `release.yml` (one-time setup at https://pypi.org/manage/account/publishing/).
+
 ## Build order
 
 The scaffold step (steps 1–2 below) has already landed. Subsequent feature work follows the sequence in `tasks/todo.md` — do not skip ahead:
