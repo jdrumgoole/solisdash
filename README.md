@@ -25,8 +25,10 @@ Self-hosted web dashboard for the [SolisCloud](https://www.soliscloud.com/) (Gin
    - Optional: `RUN_SCHEDULER=true` to enable the in-process poller, `SOLIS_STATION_ID` to pin the dashboard to one station.
 2. `uv sync --extra dev`
 3. Seed your first admin: `uv run python -m invoke add-user --username you --role admin`
-4. `uv run python -m invoke start` — runs detached, log at `var/uvicorn.log`, lifecycle via `stop` / `restart` / `status`.
-5. Visit http://127.0.0.1:8000.
+4. Pick one:
+   - **Desktop window** — `uv run solisdash` opens the app in a native pywebview window with menus and the sun icon. Closes when you quit the window. Best for "me using it from my laptop".
+   - **Detached server** — `uv run python -m invoke start` runs uvicorn in the background, log at `var/uvicorn.log`, lifecycle via `stop` / `restart` / `status`. Best for hosting on a small VPS.
+5. Visit http://127.0.0.1:8000 (or whatever port `solisdash` printed — it picks a free one by default).
 
 ## Pages
 
@@ -37,6 +39,19 @@ Self-hosted web dashboard for the [SolisCloud](https://www.soliscloud.com/) (Gin
 | `/alarms` | Filterable alarm feed (auth-gated). |
 | `/login`, `/logout` | Session cookie auth. |
 | `/health`, `/ready` | Liveness + readiness probes. |
+
+## `solisdash` CLI
+
+```
+uv run solisdash                   # open the dashboard in a pywebview window
+uv run solisdash --no-window       # serve uvicorn in the foreground (ssh / headless)
+uv run solisdash --port 8000       # pin the port instead of letting the OS pick
+uv run solisdash --debug           # pywebview dev tools + debug uvicorn logging
+```
+
+The pywebview window picks a free port by default, ships a native menu bar
+(File / View / Help with Dashboard / History / Alarms shortcuts), and uses
+the bundled sun icon on the dock / taskbar.
 
 ## Invoke tasks
 

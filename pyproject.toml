@@ -1,6 +1,6 @@
 [project]
 name = "solisdash"
-version = "0.2.4"
+version = "0.3.0"
 description = "Self-hosted dashboard for the SolisCloud platform"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,6 +21,7 @@ dependencies = [
     "bcrypt>=4.2",
     "itsdangerous>=2.2",
     "apscheduler>=3.10,<4",
+    "pywebview>=5",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,9 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
 ]
+
+[project.scripts]
+solisdash = "solisdash.cli:main"
 
 [build-system]
 requires = ["hatchling"]
