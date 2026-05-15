@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -94,7 +94,7 @@ def _sample_tiles(**overrides: Any) -> TilesData:
         month_energy_unit="kWh",
         battery_soc_pct=78.0,
         alarm_count=2,
-        data_ts=datetime(2026, 5, 14, 10, 30, tzinfo=UTC),
+        data_ts=datetime(2026, 5, 14, 10, 30, tzinfo=timezone.utc),
         stale=False,
         error=None,
     )

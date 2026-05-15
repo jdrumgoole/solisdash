@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -29,13 +29,13 @@ async def _seed_data(db: AsyncDatabase[dict[str, Any]]) -> None:
         [
             {
                 "station_id": "S1",
-                "ts": datetime(2026, 5, 13, 12, 0, tzinfo=UTC),
+                "ts": datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc),
                 "psum": 1.5,
                 "power_unit": "kW",
             },
             {
                 "station_id": "S1",
-                "ts": datetime(2026, 5, 13, 12, 5, tzinfo=UTC),
+                "ts": datetime(2026, 5, 13, 12, 5, tzinfo=timezone.utc),
                 "psum": 2.5,
                 "power_unit": "kW",
             },

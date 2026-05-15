@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 from pymongo.asynchronous.database import AsyncDatabase
@@ -33,8 +33,8 @@ class Series:
 
 
 def _day_bounds(d: date) -> tuple[datetime, datetime]:
-    start = datetime.combine(d, time.min, tzinfo=UTC)
-    end = datetime.combine(d, time.max, tzinfo=UTC)
+    start = datetime.combine(d, time.min, tzinfo=timezone.utc)
+    end = datetime.combine(d, time.max, tzinfo=timezone.utc)
     return start, end
 
 

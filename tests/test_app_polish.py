@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -30,13 +30,13 @@ async def _seed_history(db: AsyncDatabase[dict[str, Any]]) -> None:
         [
             {
                 "station_id": "S1",
-                "ts": datetime(2026, 5, 13, 12, 0, tzinfo=UTC),
+                "ts": datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc),
                 "psum": 1.5,
                 "power_unit": "kW",
             },
             {
                 "station_id": "S1",
-                "ts": datetime(2026, 5, 13, 12, 5, tzinfo=UTC),
+                "ts": datetime(2026, 5, 13, 12, 5, tzinfo=timezone.utc),
                 "psum": 2.5,
                 "power_unit": "kW",
             },
@@ -123,7 +123,7 @@ async def test_csv_endpoints_require_auth(
 
 async def _seed_alarms(db: AsyncDatabase[dict[str, Any]]) -> None:
     await db["stations"].insert_one({"id": "S1", "stationName": "Roof"})
-    polled = datetime(2026, 5, 14, 12, 0, tzinfo=UTC)
+    polled = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
     await db["alarms"].insert_many(
         [
             {

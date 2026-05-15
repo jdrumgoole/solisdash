@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -122,7 +122,7 @@ def test_parse_station_detail_extracts_tile_fields_with_units() -> None:
     assert tiles.battery_soc_pct == pytest.approx(78.0)
     assert tiles.alarm_count == 2
     assert tiles.data_ts is not None
-    assert tiles.data_ts.tzinfo is UTC
+    assert tiles.data_ts.tzinfo is timezone.utc
     assert tiles.stale is False
 
 
@@ -149,7 +149,7 @@ def test_parse_station_detail_falls_back_to_power_when_psum_absent() -> None:
 def test_from_sample_marks_stale_and_handles_datetime_timestamps() -> None:
     sample = {
         "station_id": "S1",
-        "ts": datetime(2026, 5, 14, 9, 30, tzinfo=UTC),
+        "ts": datetime(2026, 5, 14, 9, 30, tzinfo=timezone.utc),
         "power": 3.1,
         "power_unit": "kW",
         "day_energy": 12.0,
@@ -159,7 +159,7 @@ def test_from_sample_marks_stale_and_handles_datetime_timestamps() -> None:
     assert tiles.stale is True
     assert tiles.station_id == "S1"
     assert tiles.station_name == "Roof"
-    assert tiles.data_ts == datetime(2026, 5, 14, 9, 30, tzinfo=UTC)
+    assert tiles.data_ts == datetime(2026, 5, 14, 9, 30, tzinfo=timezone.utc)
     assert tiles.current_power == pytest.approx(3.1)
     assert tiles.today_energy == pytest.approx(12.0)
     assert tiles.battery_soc_pct == pytest.approx(42.0)
@@ -290,14 +290,14 @@ async def test_get_tiles_falls_back_to_station_samples_on_rate_limit(
         [
             {
                 "station_id": "S1",
-                "ts": datetime(2026, 5, 13, 12, 0, tzinfo=UTC),
+                "ts": datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc),
                 "psum": 1.5,
                 "day_energy": 5.0,
                 "battery_soc": 30.0,
             },
             {
                 "station_id": "S1",
-                "ts": datetime(2026, 5, 14, 9, 0, tzinfo=UTC),
+                "ts": datetime(2026, 5, 14, 9, 0, tzinfo=timezone.utc),
                 "psum": 2.5,
                 "day_energy": 10.0,
                 "battery_soc": 50.0,

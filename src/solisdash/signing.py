@@ -14,7 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from email.utils import format_datetime
 
 # V2.0.3 §2.2 prose says `application/json;charset=UTF-8`, but the worked
@@ -31,10 +31,10 @@ def content_md5(body: bytes) -> str:
 
 def gmt_date(when: datetime | None = None) -> str:
     """RFC1123 date in GMT, e.g. ``Fri, 26 Jul 2019 06:00:46 GMT``."""
-    moment = when or datetime.now(UTC)
+    moment = when or datetime.now(timezone.utc)
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=UTC)
-    return format_datetime(moment.astimezone(UTC), usegmt=True)
+        moment = moment.replace(tzinfo=timezone.utc)
+    return format_datetime(moment.astimezone(timezone.utc), usegmt=True)
 
 
 def string_to_sign(

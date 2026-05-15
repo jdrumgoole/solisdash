@@ -6,7 +6,7 @@ import base64
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -245,11 +245,11 @@ async def ready(
                 else:
                     polled_at = latest.get("polled_at")
                     if isinstance(polled_at, datetime):
-                        # Mongo's BSON dates come back naive (UTC) by default.
+                        # Mongo's BSON dates come back naive (timezone.utc) by default.
                         if polled_at.tzinfo is None:
-                            polled_at = polled_at.replace(tzinfo=UTC)
+                            polled_at = polled_at.replace(tzinfo=timezone.utc)
                         age_s: float | None = (
-                            datetime.now(UTC) - polled_at
+                            datetime.now(timezone.utc) - polled_at
                         ).total_seconds()
                     else:
                         age_s = None
@@ -380,7 +380,7 @@ async def history_page(
 ) -> HTMLResponse:
     stations = await history.list_stations()
     selected = stations[0]["id"] if stations else None
-    today = datetime.now(UTC).date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     return templates.TemplateResponse(
         request,
         "history.html",

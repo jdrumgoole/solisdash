@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import bcrypt
@@ -40,7 +40,7 @@ async def create_user(
         "username": username,
         "password_hash": hash_password(password),
         "role": role,
-        "created_at": datetime.now(UTC),
+        "created_at": datetime.now(timezone.utc),
     }
     result = await db["users"].insert_one(doc)
     doc["_id"] = result.inserted_id

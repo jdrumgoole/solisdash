@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -18,7 +18,7 @@ PDF_BODY = b'{"pageNo":1,"pageSize":10}'
 PDF_MD5 = "kxdxk7rbAsrzSIWgEwhH4w=="
 PDF_DATE = "Fri, 26 Jul 2019 06:00:46 GMT"
 PDF_PATH = "/v1/api/userStationList"
-PDF_INSTANT = datetime(2019, 7, 26, 6, 0, 46, tzinfo=UTC)
+PDF_INSTANT = datetime(2019, 7, 26, 6, 0, 46, tzinfo=timezone.utc)
 
 
 def test_content_md5_empty_body() -> None:

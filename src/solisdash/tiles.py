@@ -9,7 +9,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, TypeVar
 
 from pymongo.asynchronous.database import AsyncDatabase
@@ -108,7 +108,7 @@ def _ms_to_datetime(value: Any) -> datetime | None:
     ms = _as_int(value)
     if ms is None or ms <= 0:
         return None
-    return datetime.fromtimestamp(ms / 1000, tz=UTC)
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
 
 
 def parse_station_detail(detail: dict[str, Any], alarm_count: int | None) -> TilesData:
@@ -137,7 +137,7 @@ def from_sample(sample: dict[str, Any], station_name: str) -> TilesData:
     ts = sample.get("ts")
     data_ts: datetime | None
     if isinstance(ts, datetime):
-        data_ts = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+        data_ts = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
     else:
         data_ts = _ms_to_datetime(ts)
     return TilesData(

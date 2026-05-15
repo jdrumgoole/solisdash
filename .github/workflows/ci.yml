@@ -13,6 +13,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
     services:
       mongo:
         image: mongo:7
@@ -44,17 +49,17 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: Set up Python
-        run: uv python install
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --python ${{ matrix.python-version }}
 
       - name: Ruff
-        run: uv run python -m ruff check .
+        run: uv run --python ${{ matrix.python-version }} python -m ruff check .
 
       - name: Mypy
-        run: uv run python -m mypy
+        run: uv run --python ${{ matrix.python-version }} python -m mypy
 
       - name: Pytest
-        run: uv run python -m pytest -n auto -v
+        run: uv run --python ${{ matrix.python-version }} python -m pytest -n auto -v

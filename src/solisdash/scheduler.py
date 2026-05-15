@@ -4,13 +4,13 @@ Two jobs:
 - `sample`  — pull `stationDetail` for every station into `station_samples`
               every `SCHEDULER_SAMPLE_MINUTES` minutes.
 - `daily`   — pull this month's `stationMonth` and upsert daily totals at
-              `SCHEDULER_DAILY_HOUR_UTC:SCHEDULER_DAILY_MINUTE_UTC` UTC.
+              `SCHEDULER_DAILY_HOUR_UTC:SCHEDULER_DAILY_MINUTE_UTC` timezone.utc.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -23,7 +23,7 @@ log = logging.getLogger("solisdash.scheduler")
 
 
 def build_scheduler(poller: Poller, settings: Settings) -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone=UTC)
+    scheduler = AsyncIOScheduler(timezone=timezone.utc)
 
     async def _sample() -> None:
         log.info("scheduler: sample run starting")
@@ -41,7 +41,7 @@ def build_scheduler(poller: Poller, settings: Settings) -> AsyncIOScheduler:
     async def _daily() -> None:
         log.info("scheduler: daily run starting")
         try:
-            month = datetime.now(UTC).strftime("%Y-%m")
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
             for sid in await poller.list_station_ids():
                 await poller.poll_daily_for_month(sid, month)
             log.info("scheduler: daily run done for month %s", month)
@@ -52,7 +52,7 @@ def build_scheduler(poller: Poller, settings: Settings) -> AsyncIOScheduler:
         _sample,
         trigger=IntervalTrigger(minutes=settings.SCHEDULER_SAMPLE_MINUTES),
         id="sample",
-        next_run_time=datetime.now(UTC),  # first run on startup
+        next_run_time=datetime.now(timezone.utc),  # first run on startup
         max_instances=1,
         coalesce=True,
     )

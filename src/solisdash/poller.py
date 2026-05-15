@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from pymongo.asynchronous.database import AsyncDatabase
@@ -68,7 +68,7 @@ def _row_to_daily(station_id: str, row: dict[str, Any]) -> dict[str, Any] | None
     if iso is None:
         return None
     if isinstance(iso, int | float):
-        when = datetime.fromtimestamp(int(iso) / 1000, tz=UTC).date().isoformat()
+        when = datetime.fromtimestamp(int(iso) / 1000, tz=timezone.utc).date().isoformat()
     else:
         when = str(iso)[:10]
     return {
@@ -161,7 +161,7 @@ class Poller:
             log.warning("station_detail %s failed: %s", station_id, exc)
             return None
 
-        polled_at = datetime.now(UTC)
+        polled_at = datetime.now(timezone.utc)
         sample = _detail_to_sample(station_id, detail, polled_at)
         await self._db["station_samples"].insert_one(sample)
         await self._db["stations"].update_one(
@@ -243,7 +243,7 @@ class Poller:
             log.warning("alarm_list %s failed: %s", station_id, exc)
             return 0
 
-        polled_at = datetime.now(UTC)
+        polled_at = datetime.now(timezone.utc)
         written = 0
         for record in page.records:
             doc = _alarm_to_doc(station_id, record, polled_at)

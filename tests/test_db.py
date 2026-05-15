@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -84,7 +84,7 @@ async def test_station_samples_supports_indexed_time_range_query(
     clean_db: AsyncDatabase[dict[str, Any]],
 ) -> None:
     coll = clean_db["station_samples"]
-    base = datetime(2026, 5, 13, 0, 0, tzinfo=UTC)
+    base = datetime(2026, 5, 13, 0, 0, tzinfo=timezone.utc)
     docs = [
         {"station_id": "S1", "ts": base.replace(hour=h), "power": 100.0 + h}
         for h in range(0, 24)

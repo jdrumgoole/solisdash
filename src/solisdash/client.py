@@ -14,7 +14,7 @@ import json
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Any
 
 import httpx
 
@@ -96,7 +96,7 @@ class SolisClient:
             transport=transport,
         )
 
-    async def __aenter__(self) -> Self:
+    async def __aenter__(self) -> SolisClient:
         return self
 
     async def __aexit__(self, *exc: object) -> None:

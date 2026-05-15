@@ -1,9 +1,9 @@
 [project]
 name = "solisdash"
-version = "0.3.2"
+version = "0.4.0"
 description = "Self-hosted dashboard for the SolisCloud (Ginlong Solis) platform"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "Joe Drumgoole", email = "joe@joedrumgoole.com" }]
@@ -13,7 +13,10 @@ classifiers = [
     "Framework :: FastAPI",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Home Automation",
     "Topic :: Scientific/Engineering",
 ]
@@ -41,6 +44,7 @@ dev = [
     "pytest-xdist>=3.6",
     "ruff>=0.7",
     "mypy>=1.13",
+    "tomli>=2",  # `tomllib` is stdlib from 3.11; install tomli everywhere for dev so the mypy ignore stays unconditional
 ]
 
 [project.scripts]
@@ -79,7 +83,7 @@ addopts = ["-q"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "RUF"]
@@ -97,7 +101,7 @@ extend-immutable-calls = [
 ]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.10"
 strict = true
 files = ["src", "tests", "tasks.py"]
 

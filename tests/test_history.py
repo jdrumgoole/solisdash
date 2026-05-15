@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 import pytest
@@ -61,7 +61,7 @@ async def test_list_stations_empty_when_nothing_polled(
 async def test_day_series_returns_5min_samples_for_that_day(
     clean_db: AsyncDatabase[dict[str, Any]],
 ) -> None:
-    base = datetime(2026, 5, 13, 12, 0, tzinfo=UTC)
+    base = datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc)
     await clean_db["station_samples"].insert_many(
         [
             {"station_id": "S1", "ts": base, "psum": 1.0, "power_unit": "kW"},
@@ -76,7 +76,7 @@ async def test_day_series_returns_5min_samples_for_that_day(
             # Different day — must be excluded
             {
                 "station_id": "S1",
-                "ts": datetime(2026, 5, 14, 1, 0, tzinfo=UTC),
+                "ts": datetime(2026, 5, 14, 1, 0, tzinfo=timezone.utc),
                 "psum": 5.0,
             },
         ]
@@ -96,7 +96,7 @@ async def test_day_series_falls_back_to_power_when_no_psum(
     await clean_db["station_samples"].insert_one(
         {
             "station_id": "S1",
-            "ts": datetime(2026, 5, 13, 12, 0, tzinfo=UTC),
+            "ts": datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc),
             "power": 3.3,
         }
     )

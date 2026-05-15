@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 import httpx
@@ -98,7 +98,7 @@ def test_iter_months_rejects_end_before_start() -> None:
 
 
 def test_detail_to_sample_uses_solis_timestamp_when_present() -> None:
-    polled = datetime(2026, 5, 14, 12, 30, tzinfo=UTC)
+    polled = datetime(2026, 5, 14, 12, 30, tzinfo=timezone.utc)
     detail = {
         "psum": 0.76,
         "psumStr": "kW",
@@ -115,12 +115,12 @@ def test_detail_to_sample_uses_solis_timestamp_when_present() -> None:
     assert sample["day_energy"] == pytest.approx(7.3)
     assert sample["month_energy"] == pytest.approx(200.3)
     assert sample["battery_soc"] == pytest.approx(55.0)
-    assert sample["ts"] == datetime.fromtimestamp(1778760339, tz=UTC)
+    assert sample["ts"] == datetime.fromtimestamp(1778760339, tz=timezone.utc)
     assert sample["polled_at"] == polled
 
 
 def test_detail_to_sample_falls_back_to_polled_at_when_no_timestamp() -> None:
-    polled = datetime(2026, 5, 14, 12, 30, tzinfo=UTC)
+    polled = datetime(2026, 5, 14, 12, 30, tzinfo=timezone.utc)
     sample = _detail_to_sample("S1", {"psum": 1.0}, polled)
     assert sample["ts"] == polled
 
@@ -143,7 +143,7 @@ def test_row_to_daily_uses_date_str_when_present() -> None:
 
 
 def test_row_to_daily_converts_ms_timestamp_to_iso_date() -> None:
-    # 2026-05-13 00:00 UTC
+    # 2026-05-13 00:00 timezone.utc
     row = {"date": 1778688000000, "energy": 31.3, "energyStr": "kWh"}
     doc = _row_to_daily("S1", row)
     assert doc is not None
@@ -328,7 +328,7 @@ def test_solis_api_error_imported_for_callers() -> None:
 
 
 def test_alarm_to_doc_extracts_fields() -> None:
-    polled = datetime(2026, 5, 14, 12, 30, tzinfo=UTC)
+    polled = datetime(2026, 5, 14, 12, 30, tzinfo=timezone.utc)
     row = {
         "id": "A1",
         "stationId": "S1",
@@ -356,7 +356,7 @@ def test_alarm_to_doc_extracts_fields() -> None:
 
 
 def test_alarm_to_doc_returns_none_without_id() -> None:
-    assert _alarm_to_doc("S1", {"alarmCode": "x"}, datetime.now(UTC)) is None
+    assert _alarm_to_doc("S1", {"alarmCode": "x"}, datetime.now(timezone.utc)) is None
 
 
 async def test_poll_alarms_upserts_rows_by_id(
