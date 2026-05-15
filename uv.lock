@@ -1029,7 +1029,7 @@ wheels = [
 
 [[package]]
 name = "solisdash"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
@@ -1069,7 +1069,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
-    { name = "pymongo", extras = ["srv"], specifier = ">=4.13" },
+    { name = "pymongo", specifier = ">=4.13" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6" },

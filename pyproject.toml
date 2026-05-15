@@ -1,6 +1,6 @@
 [project]
 name = "solisdash"
-version = "0.3.1"
+version = "0.3.2"
 description = "Self-hosted dashboard for the SolisCloud (Ginlong Solis) platform"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -27,7 +27,7 @@ dependencies = [
     "pydantic-settings>=2.6",
     "python-dotenv>=1.0",
     "invoke>=2.2",
-    "pymongo[srv]>=4.13",
+    "pymongo>=4.13",
     "bcrypt>=4.2",
     "itsdangerous>=2.2",
     "apscheduler>=3.10,<4",
