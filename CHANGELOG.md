@@ -4,6 +4,14 @@ All notable changes to **Solisdash** are documented here. Version numbers
 follow [Semantic Versioning](https://semver.org/). The package is published
 to PyPI on every `vX.Y.Z` tag push.
 
+## 0.8.2 — 2026-05-17
+
+### Changed
+- Housekeeping release. No user-visible changes. Backfilled GitHub
+  Release pages for v0.7.0 – v0.8.1 with their full CHANGELOG entries
+  so the project's release history is properly browseable from the
+  Releases tab.
+
 ## 0.8.1 — 2026-05-16
 
 ### Fixed
