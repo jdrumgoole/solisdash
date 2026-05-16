@@ -35,7 +35,19 @@ from solisdash.client import SolisAPIError, SolisClient
 from solisdash.config import get_settings
 from solisdash.configfile import delete_toml, user_config_toml_path, write_toml
 from solisdash.db import ensure_indexes
-from solisdash.history import HistoryService, Series, parse_month
+from solisdash.history import (
+    METRIC_ENERGY,
+    METRIC_POWER,
+    METRIC_SUPPORTS,
+    VIEW_ALL,
+    VIEW_DAY,
+    VIEW_MONTH,
+    VIEW_YEAR,
+    HistoryService,
+    Series,
+    metric_supports,
+    parse_month,
+)
 from solisdash.poller import Poller
 from solisdash.ratelimit import TokenBucket
 from solisdash.scheduler import build_scheduler
@@ -778,21 +790,54 @@ async def history_poll_now(
     )
 
 
+_DAY_LABELS = {
+    "power": ("Power", "kW"),
+    "energy": ("Day energy", "kWh"),
+    "battery": ("Battery SOC", "%"),
+    "alarms": ("Open alarms", ""),
+}
+_DAILY_LABELS = {
+    "energy": {
+        "month": ("Daily energy", "kWh"),
+        "year": ("Monthly energy", "kWh"),
+        "all": ("Annual energy", "kWh"),
+    },
+    "money": {
+        "month": ("Daily revenue", ""),
+        "year": ("Monthly revenue", ""),
+        "all": ("Annual revenue", ""),
+    },
+}
+
+
+def _validate_metric(metric: str, view: str) -> None:
+    if metric not in METRIC_SUPPORTS:
+        raise HTTPException(status_code=400, detail=f"unknown metric: {metric!r}")
+    if not metric_supports(metric, view):
+        raise HTTPException(
+            status_code=400,
+            detail=f"metric {metric!r} is not available for the {view!r} view",
+        )
+
+
 @app.get("/history/day.json")
 async def history_day_json(
     station_id: str | None = Query(None),
     when: str = Query(..., description="YYYY-MM-DD"),
+    metric: str = Query(METRIC_POWER),
     history: HistoryService = Depends(get_history_service),
     user: dict[str, Any] = Depends(require_user),
 ) -> JSONResponse:
+    _validate_metric(metric, VIEW_DAY)
     sid = await _resolve_station_id(history, station_id)
     if sid is None:
-        return JSONResponse(_empty_series_response("Power", "kW", station_id=None))
+        label, unit = _DAY_LABELS.get(metric, ("Series", ""))
+        return JSONResponse(_empty_series_response(label, unit, station_id=None))
     try:
         when_date = date.fromisoformat(when)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    series = await history.day_series(sid, when_date)
+    series = await history.day_series(sid, when_date, metric=metric)
     return JSONResponse({"station_id": sid, **series.to_json()})
 
 
@@ -800,17 +845,20 @@ async def history_day_json(
 async def history_month_json(
     station_id: str | None = Query(None),
     month: str = Query(..., description="YYYY-MM"),
+    metric: str = Query(METRIC_ENERGY),
     history: HistoryService = Depends(get_history_service),
     user: dict[str, Any] = Depends(require_user),
 ) -> JSONResponse:
+    _validate_metric(metric, VIEW_MONTH)
     sid = await _resolve_station_id(history, station_id)
     if sid is None:
-        return JSONResponse(_empty_series_response("Daily energy", "kWh", station_id=None))
+        label, unit = _DAILY_LABELS[metric]["month"]
+        return JSONResponse(_empty_series_response(label, unit, station_id=None))
     try:
         parse_month(month)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    series = await history.month_daily(sid, month)
+    series = await history.month_daily(sid, month, metric=metric)
     return JSONResponse({"station_id": sid, **series.to_json()})
 
 
@@ -818,30 +866,32 @@ async def history_month_json(
 async def history_year_json(
     station_id: str | None = Query(None),
     year: int = Query(...),
+    metric: str = Query(METRIC_ENERGY),
     history: HistoryService = Depends(get_history_service),
     user: dict[str, Any] = Depends(require_user),
 ) -> JSONResponse:
+    _validate_metric(metric, VIEW_YEAR)
     sid = await _resolve_station_id(history, station_id)
     if sid is None:
-        return JSONResponse(
-            _empty_series_response("Monthly energy", "kWh", station_id=None)
-        )
-    series = await history.year_monthly(sid, year)
+        label, unit = _DAILY_LABELS[metric]["year"]
+        return JSONResponse(_empty_series_response(label, unit, station_id=None))
+    series = await history.year_monthly(sid, year, metric=metric)
     return JSONResponse({"station_id": sid, **series.to_json()})
 
 
 @app.get("/history/all.json")
 async def history_all_json(
     station_id: str | None = Query(None),
+    metric: str = Query(METRIC_ENERGY),
     history: HistoryService = Depends(get_history_service),
     user: dict[str, Any] = Depends(require_user),
 ) -> JSONResponse:
+    _validate_metric(metric, VIEW_ALL)
     sid = await _resolve_station_id(history, station_id)
     if sid is None:
-        return JSONResponse(
-            _empty_series_response("Annual energy", "kWh", station_id=None)
-        )
-    series = await history.all_time(sid)
+        label, unit = _DAILY_LABELS[metric]["all"]
+        return JSONResponse(_empty_series_response(label, unit, station_id=None))
+    series = await history.all_time(sid, metric=metric)
     return JSONResponse({"station_id": sid, **series.to_json()})
 
 
@@ -872,20 +922,22 @@ def _csv_response(body: str, filename: str) -> Response:
 async def history_day_csv(
     station_id: str | None = Query(None),
     when: str = Query(..., description="YYYY-MM-DD"),
+    metric: str = Query(METRIC_POWER),
     history: HistoryService = Depends(get_history_service),
     user: dict[str, Any] = Depends(require_user),
 ) -> Response:
+    _validate_metric(metric, VIEW_DAY)
     sid = await _resolve_station_id(history, station_id)
     if sid is None:
-        return _csv_response("timestamp_ms,power\n", "history-day.csv")
+        return _csv_response(f"timestamp_ms,{metric}\n", f"history-day-{metric}.csv")
     try:
         when_date = date.fromisoformat(when)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    series = await history.day_series(sid, when_date)
+    series = await history.day_series(sid, when_date, metric=metric)
     return _csv_response(
-        _series_to_csv(series, x_header="timestamp_ms", y_header="power"),
-        f"history-day-{sid}-{when}.csv",
+        _series_to_csv(series, x_header="timestamp_ms", y_header=metric),
+        f"history-day-{metric}-{sid}-{when}.csv",
     )
 
 
@@ -893,20 +945,22 @@ async def history_day_csv(
 async def history_month_csv(
     station_id: str | None = Query(None),
     month: str = Query(..., description="YYYY-MM"),
+    metric: str = Query(METRIC_ENERGY),
     history: HistoryService = Depends(get_history_service),
     user: dict[str, Any] = Depends(require_user),
 ) -> Response:
+    _validate_metric(metric, VIEW_MONTH)
     sid = await _resolve_station_id(history, station_id)
     if sid is None:
-        return _csv_response("date,energy\n", "history-month.csv")
+        return _csv_response(f"date,{metric}\n", f"history-month-{metric}.csv")
     try:
         parse_month(month)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    series = await history.month_daily(sid, month)
+    series = await history.month_daily(sid, month, metric=metric)
     return _csv_response(
-        _series_to_csv(series, x_header="date", y_header="energy"),
-        f"history-month-{sid}-{month}.csv",
+        _series_to_csv(series, x_header="date", y_header=metric),
+        f"history-month-{metric}-{sid}-{month}.csv",
     )
 
 
@@ -914,32 +968,36 @@ async def history_month_csv(
 async def history_year_csv(
     station_id: str | None = Query(None),
     year: int = Query(...),
+    metric: str = Query(METRIC_ENERGY),
     history: HistoryService = Depends(get_history_service),
     user: dict[str, Any] = Depends(require_user),
 ) -> Response:
+    _validate_metric(metric, VIEW_YEAR)
     sid = await _resolve_station_id(history, station_id)
     if sid is None:
-        return _csv_response("month,energy\n", "history-year.csv")
-    series = await history.year_monthly(sid, year)
+        return _csv_response(f"month,{metric}\n", f"history-year-{metric}.csv")
+    series = await history.year_monthly(sid, year, metric=metric)
     return _csv_response(
-        _series_to_csv(series, x_header="month", y_header="energy"),
-        f"history-year-{sid}-{year}.csv",
+        _series_to_csv(series, x_header="month", y_header=metric),
+        f"history-year-{metric}-{sid}-{year}.csv",
     )
 
 
 @app.get("/history/all.csv")
 async def history_all_csv(
     station_id: str | None = Query(None),
+    metric: str = Query(METRIC_ENERGY),
     history: HistoryService = Depends(get_history_service),
     user: dict[str, Any] = Depends(require_user),
 ) -> Response:
+    _validate_metric(metric, VIEW_ALL)
     sid = await _resolve_station_id(history, station_id)
     if sid is None:
-        return _csv_response("year,energy\n", "history-all.csv")
-    series = await history.all_time(sid)
+        return _csv_response(f"year,{metric}\n", f"history-all-{metric}.csv")
+    series = await history.all_time(sid, metric=metric)
     return _csv_response(
-        _series_to_csv(series, x_header="year", y_header="energy"),
-        f"history-all-{sid}.csv",
+        _series_to_csv(series, x_header="year", y_header=metric),
+        f"history-all-{metric}-{sid}.csv",
     )
 
 

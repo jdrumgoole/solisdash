@@ -79,6 +79,82 @@ async def test_history_page_renders_station_picker_and_chart_canvas(
     assert "chartjs-adapter-date-fns" in body
 
 
+async def test_history_page_renders_metric_tabs(
+    auth_client: httpx.AsyncClient, clean_db: AsyncDatabase[dict[str, Any]]
+) -> None:
+    await _seed_data(clean_db)
+    await _login(auth_client, clean_db)
+    r = await auth_client.get("/history")
+    body = r.text
+    for m in ("power", "energy", "battery", "money", "alarms"):
+        assert f'data-metric="{m}"' in body
+
+
+async def test_day_json_supports_battery_metric(
+    auth_client: httpx.AsyncClient, clean_db: AsyncDatabase[dict[str, Any]]
+) -> None:
+    await clean_db["stations"].insert_one({"id": "S1", "stationName": "Roof"})
+    await clean_db["station_samples"].insert_many(
+        [
+            {
+                "station_id": "S1",
+                "ts": datetime(2026, 5, 13, 9, 0, tzinfo=timezone.utc),
+                "battery_soc": 22.5,
+            },
+            {
+                "station_id": "S1",
+                "ts": datetime(2026, 5, 13, 10, 0, tzinfo=timezone.utc),
+                "battery_soc": 81.0,
+            },
+        ]
+    )
+    await _login(auth_client, clean_db)
+    r = await auth_client.get(
+        "/history/day.json?station_id=S1&when=2026-05-13&metric=battery"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["label"] == "Battery SOC"
+    assert body["unit"] == "%"
+    assert [p["v"] for p in body["points"]] == [22.5, 81.0]
+
+
+async def test_day_json_rejects_metric_not_supported_for_view(
+    auth_client: httpx.AsyncClient, clean_db: AsyncDatabase[dict[str, Any]]
+) -> None:
+    """Money is a daily-rollup metric — not valid for the Day view."""
+    await _seed_data(clean_db)
+    await _login(auth_client, clean_db)
+    r = await auth_client.get(
+        "/history/day.json?station_id=S1&when=2026-05-13&metric=money"
+    )
+    assert r.status_code == 400
+
+
+async def test_month_json_supports_money_metric(
+    auth_client: httpx.AsyncClient, clean_db: AsyncDatabase[dict[str, Any]]
+) -> None:
+    await clean_db["stations"].insert_one({"id": "S1", "stationName": "Roof"})
+    await clean_db["station_daily"].insert_many(
+        [
+            {"station_id": "S1", "date": "2026-05-01", "money": 3.2, "money_unit": "€"},
+            {"station_id": "S1", "date": "2026-05-13", "money": 4.5, "money_unit": "€"},
+        ]
+    )
+    await _login(auth_client, clean_db)
+    r = await auth_client.get(
+        "/history/month.json?station_id=S1&month=2026-05&metric=money"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["label"] == "Daily revenue"
+    assert body["unit"] == "€"
+    assert [(p["t"], p["v"]) for p in body["points"]] == [
+        ("2026-05-01", 3.2),
+        ("2026-05-13", 4.5),
+    ]
+
+
 async def test_history_page_warns_when_no_stations(
     auth_client: httpx.AsyncClient, clean_db: AsyncDatabase[dict[str, Any]]
 ) -> None:

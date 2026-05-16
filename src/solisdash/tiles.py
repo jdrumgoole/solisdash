@@ -83,6 +83,47 @@ class TilesData:
     data_ts: datetime | None
     stale: bool = False
     error: str | None = None
+    # Pre-rendered SVG `d` strings for the inline sparklines under each
+    # tile. Each path is for a 200x40 viewBox. None when no recent data.
+    power_sparkline: str | None = None
+    today_energy_sparkline: str | None = None
+    month_energy_sparkline: str | None = None
+    battery_sparkline: str | None = None
+    alarms_sparkline: str | None = None
+
+
+def sparkline_path(
+    values: list[float | None], *, width: int = 200, height: int = 40, pad: int = 2
+) -> str | None:
+    """Return an SVG `d` attribute for a sparkline over `values`.
+
+    Returns None when there are fewer than two real points — sparklines
+    only make sense once there's a trend to show.
+    """
+    real = [v for v in values if v is not None]
+    if len(real) < 2:
+        return None
+    lo, hi = min(real), max(real)
+    span = (hi - lo) or 1.0
+    # Replace gaps with the running last value so the path doesn't dive.
+    filled: list[float] = []
+    last = real[0]
+    for v in values:
+        if v is not None:
+            last = v
+        filled.append(last)
+    n = len(filled)
+    inner_w = width - 2 * pad
+    inner_h = height - 2 * pad
+
+    def x(i: int) -> float:
+        return pad + inner_w * i / (n - 1) if n > 1 else pad
+
+    def y(v: float) -> float:
+        return pad + inner_h - ((v - lo) / span) * inner_h
+
+    pts = [f"{x(i):.2f},{y(v):.2f}" for i, v in enumerate(filled)]
+    return "M" + " L".join(pts)
 
 
 def _as_float(value: Any) -> float | None:
@@ -101,6 +142,12 @@ def _as_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _now_minus(*, hours: int) -> datetime:
+    from datetime import timedelta
+
+    return datetime.now(timezone.utc) - timedelta(hours=hours)
 
 
 def _ms_to_datetime(value: Any) -> datetime | None:
@@ -197,13 +244,69 @@ class LiveTilesService:
             return await self._fetch_fresh(station_id)
 
         try:
-            return await self._tiles_cache.get_or_set(station_id, _fetch)
+            tiles = await self._tiles_cache.get_or_set(station_id, _fetch)
         except SolisAPIError as exc:
             if exc.code in RETRYABLE_CODES:
                 fallback = await self._last_known(station_id)
                 if fallback is not None:
-                    return replace(fallback, error=f"rate limited ({exc.code})")
+                    fallback = replace(fallback, error=f"rate limited ({exc.code})")
+                    return await self._with_sparklines(station_id, fallback)
             raise
+        return await self._with_sparklines(station_id, tiles)
+
+    async def _with_sparklines(
+        self, station_id: str, tiles: TilesData
+    ) -> TilesData:
+        """Attach 24h sparkline path strings.
+
+        Uncached — the underlying query is cheap (one indexed range scan)
+        and the tiles page refreshes every 30s, so we want the most recent
+        trend each time. If the lookup fails for any reason we return the
+        tiles unchanged so the page still renders.
+        """
+        try:
+            cursor = self._db["station_samples"].find(
+                {
+                    "station_id": station_id,
+                    "ts": {"$gte": _now_minus(hours=24)},
+                },
+                sort=[("ts", 1)],
+                projection={
+                    "_id": 0,
+                    "psum": 1,
+                    "power": 1,
+                    "day_energy": 1,
+                    "month_energy": 1,
+                    "battery_soc": 1,
+                    "alarm_count": 1,
+                },
+            )
+            rows = [doc async for doc in cursor]
+        except Exception:
+            return tiles
+        if not rows:
+            return tiles
+        return replace(
+            tiles,
+            power_sparkline=sparkline_path(
+                [_as_float(r.get("psum") or r.get("power")) for r in rows]
+            ),
+            today_energy_sparkline=sparkline_path(
+                [_as_float(r.get("day_energy")) for r in rows]
+            ),
+            month_energy_sparkline=sparkline_path(
+                [_as_float(r.get("month_energy")) for r in rows]
+            ),
+            battery_sparkline=sparkline_path(
+                [_as_float(r.get("battery_soc")) for r in rows]
+            ),
+            alarms_sparkline=sparkline_path(
+                [
+                    float(c) if (c := _as_int(r.get("alarm_count"))) is not None else None
+                    for r in rows
+                ]
+            ),
+        )
 
     async def _fetch_fresh(self, station_id: str) -> TilesData:
         detail = await self._solis.station_detail(station_id=station_id)

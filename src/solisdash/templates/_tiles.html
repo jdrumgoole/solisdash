@@ -1,10 +1,21 @@
-{% macro tile(label, value, unit) %}
+{% macro sparkline(path) %}
+{% if path %}
+<svg class="tile-sparkline" viewBox="0 0 200 40" preserveAspectRatio="none"
+     role="img" aria-hidden="true">
+  <path class="area" d="{{ path }} L200,40 L0,40 Z" />
+  <path d="{{ path }}" />
+</svg>
+{% endif %}
+{% endmacro %}
+
+{% macro tile(label, value, unit, spark_path=None) %}
 <article class="tile">
   <header>{{ label }}</header>
   <strong class="tile-value">
     {% if value is none %}—{% else %}{{ value }}{% endif %}
   </strong>
   {% if unit %}<small class="tile-unit">{{ unit }}</small>{% endif %}
+  {{ sparkline(spark_path) }}
 </article>
 {% endmacro %}
 
@@ -22,11 +33,26 @@
   {% endif %}
 
   <div class="tile-grid">
-    {{ tile('Current power', '%.2f'|format(tiles.current_power) if tiles.current_power is not none else none, tiles.current_power_unit) }}
-    {{ tile("Today's yield", '%.2f'|format(tiles.today_energy) if tiles.today_energy is not none else none, tiles.today_energy_unit) }}
-    {{ tile('This month', '%.1f'|format(tiles.month_energy) if tiles.month_energy is not none else none, tiles.month_energy_unit) }}
-    {{ tile('Battery SOC', '%.0f'|format(tiles.battery_soc_pct) if tiles.battery_soc_pct is not none else none, '%') }}
-    {{ tile('Open alarms', tiles.alarm_count if tiles.alarm_count is not none else none, '') }}
+    {{ tile('Current power',
+            '%.2f'|format(tiles.current_power) if tiles.current_power is not none else none,
+            tiles.current_power_unit,
+            spark_path=tiles.power_sparkline) }}
+    {{ tile("Today's yield",
+            '%.2f'|format(tiles.today_energy) if tiles.today_energy is not none else none,
+            tiles.today_energy_unit,
+            spark_path=tiles.today_energy_sparkline) }}
+    {{ tile('This month',
+            '%.1f'|format(tiles.month_energy) if tiles.month_energy is not none else none,
+            tiles.month_energy_unit,
+            spark_path=tiles.month_energy_sparkline) }}
+    {{ tile('Battery SOC',
+            '%.0f'|format(tiles.battery_soc_pct) if tiles.battery_soc_pct is not none else none,
+            '%',
+            spark_path=tiles.battery_sparkline) }}
+    {{ tile('Open alarms',
+            tiles.alarm_count if tiles.alarm_count is not none else none,
+            '',
+            spark_path=tiles.alarms_sparkline) }}
   </div>
 
   <small class="tile-footnote">

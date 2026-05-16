@@ -26,6 +26,14 @@
     <div id="poll-now-result" class="test-slot"></div>
   </article>
 {% else %}
+  <nav id="metric-tabs" class="metric-tabs" role="tablist" aria-label="Metric">
+    <button type="button" role="tab" class="metric-tab" data-metric="power">Power</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="energy">Energy</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="battery">Battery</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="money">Money</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="alarms">Alarms</button>
+  </nav>
+
   <form id="history-form" onsubmit="return false">
     <fieldset class="grid">
       <label>
@@ -40,7 +48,7 @@
       </label>
 
       <label>
-        View
+        Range
         <select name="view" id="view-select">
           <option value="day" selected>Day (5 min)</option>
           <option value="month">Month (daily)</option>

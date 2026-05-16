@@ -4,6 +4,31 @@ All notable changes to **Solisdash** are documented here. Version numbers
 follow [Semantic Versioning](https://semver.org/). The package is published
 to PyPI on every `vX.Y.Z` tag push.
 
+## 0.8.0 — 2026-05-16
+
+### Added
+- **Metric tabs on the History page.** Power / Energy / Battery / Money /
+  Alarms sit across the top; the range selector greys out options that
+  aren't valid for the chosen metric (e.g. Money is daily-rollup only,
+  so the Day option disables when Money is active). Each metric gets its
+  own series colour. CSV download now follows the active metric.
+- **24-hour sparklines under each live tile** on the home page. Tiny SVG
+  trend lines drawn from `station_samples`, refreshed alongside the
+  tiles via the existing 30-second HTMX swap. Server-rendered SVG paths,
+  no extra JS or Chart.js needed.
+- New JSON/CSV history endpoints accept `?metric=` (`power`, `energy`,
+  `battery`, `money`, `alarms`). Existing callers without the parameter
+  keep getting the previous default (power for day, energy elsewhere).
+
+### Changed
+- `HistoryService.day_series`, `month_daily`, `year_monthly`, `all_time`
+  now take an optional `metric=` keyword. Defaults are unchanged.
+
+### Fixed
+- `LiveTilesService.get_tiles` falls through to the existing tile data
+  if the sparkline lookup fails. Sparklines are decorative; a Mongo
+  hiccup must never blank the home page.
+
 ## 0.7.3 — 2026-05-16
 
 ### Changed
