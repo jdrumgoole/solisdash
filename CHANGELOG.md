@@ -4,6 +4,21 @@ All notable changes to **Solisdash** are documented here. Version numbers
 follow [Semantic Versioning](https://semver.org/). The package is published
 to PyPI on every `vX.Y.Z` tag push.
 
+## 0.7.2 — 2026-05-16
+
+### Changed
+- The History page's empty state no longer tells the user to drop to a
+  shell and run `uv run python -m invoke poll-once`. It now offers a
+  **Poll SolisCloud now** button that pulls each station's current state
+  once via a new auth-gated `POST /history/poll-now` endpoint and
+  refreshes the page so the chart UI takes over. Keeps the
+  client experience GUI-only.
+
+### Fixed
+- `get_solis_client` no longer raises `AttributeError` when the
+  lifespan handler hasn't initialised `app.state` (e.g. under
+  `httpx.ASGITransport` in tests).
+
 ## 0.7.1 — 2026-05-16
 
 ### Fixed

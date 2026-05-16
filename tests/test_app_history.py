@@ -85,7 +85,132 @@ async def test_history_page_warns_when_no_stations(
     await _login(auth_client, clean_db)
     r = await auth_client.get("/history")
     assert r.status_code == 200
-    assert "No stations stored yet" in r.text
+    body = r.text
+    assert "No stations stored yet" in body
+    # GUI-driven recovery — the empty state must offer a button, never a CLI
+    # command. Specifically, do NOT mention `invoke poll-once` or `uv run`.
+    assert "invoke poll-once" not in body
+    assert "uv run" not in body
+    assert 'hx-post="/history/poll-now"' in body
+    assert "Poll SolisCloud now" in body
+
+
+# --- /history/poll-now ------------------------------------------------------
+
+
+class _FakeSolisClient:
+    """SolisClient stand-in for /history/poll-now tests.
+
+    Quacks like the bits of `SolisClient` the `Poller` actually calls:
+    `user_station_list` for discovery, `station_detail` per station.
+    """
+
+    def __init__(
+        self,
+        *,
+        stations: list[dict[str, Any]] | None = None,
+        detail: dict[str, Any] | None = None,
+        raise_on_list: BaseException | None = None,
+    ) -> None:
+        self._stations = stations or []
+        self._detail = detail or {}
+        self._raise_on_list = raise_on_list
+
+    async def user_station_list(
+        self, page_no: int = 1, page_size: int = 20, **_: Any
+    ) -> Any:
+        from solisdash.client import Page
+
+        if self._raise_on_list is not None:
+            raise self._raise_on_list
+        return Page(
+            records=list(self._stations),
+            total=len(self._stations),
+            size=page_size,
+            current=page_no,
+            pages=1,
+        )
+
+    async def station_detail(self, *, station_id: Any = None, **_: Any) -> dict[str, Any]:
+        return {"id": station_id, "stationName": f"Station {station_id}", **self._detail}
+
+
+async def test_history_poll_now_requires_auth(
+    auth_client: httpx.AsyncClient,
+) -> None:
+    r = await auth_client.post("/history/poll-now", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+async def test_history_poll_now_writes_samples_and_asks_for_refresh(
+    auth_client: httpx.AsyncClient, clean_db: AsyncDatabase[dict[str, Any]]
+) -> None:
+    from solisdash.app import app, get_solis_client
+
+    fake = _FakeSolisClient(stations=[{"id": "S1"}, {"id": "S2"}])
+
+    async def _override_solis() -> _FakeSolisClient:
+        return fake
+
+    app.dependency_overrides[get_solis_client] = _override_solis
+    try:
+        await _login(auth_client, clean_db)
+        r = await auth_client.post("/history/poll-now")
+        assert r.status_code == 200
+        assert r.headers.get("hx-refresh") == "true"
+        assert "Polled 2 station" in r.text
+        # The samples are durable so subsequent /history renders pick them up.
+        assert await clean_db["station_samples"].count_documents({}) == 2
+        assert await clean_db["stations"].count_documents({}) == 2
+    finally:
+        app.dependency_overrides.pop(get_solis_client, None)
+
+
+async def test_history_poll_now_renders_error_on_soliscloud_failure(
+    auth_client: httpx.AsyncClient, clean_db: AsyncDatabase[dict[str, Any]]
+) -> None:
+    from solisdash.app import app, get_solis_client
+    from solisdash.client import SolisAPIError
+
+    fake = _FakeSolisClient(
+        raise_on_list=SolisAPIError(code="1004", msg="wrong sign"),
+    )
+
+    async def _override_solis() -> _FakeSolisClient:
+        return fake
+
+    app.dependency_overrides[get_solis_client] = _override_solis
+    try:
+        await _login(auth_client, clean_db)
+        r = await auth_client.post("/history/poll-now")
+        assert r.status_code == 200
+        assert "SolisCloud rejected" in r.text
+        assert "wrong sign" in r.text
+        assert "/settings" in r.text  # nudge to fix creds
+    finally:
+        app.dependency_overrides.pop(get_solis_client, None)
+
+
+async def test_history_poll_now_warns_when_account_has_no_stations(
+    auth_client: httpx.AsyncClient, clean_db: AsyncDatabase[dict[str, Any]]
+) -> None:
+    from solisdash.app import app, get_solis_client
+
+    fake = _FakeSolisClient(stations=[])
+
+    async def _override_solis() -> _FakeSolisClient:
+        return fake
+
+    app.dependency_overrides[get_solis_client] = _override_solis
+    try:
+        await _login(auth_client, clean_db)
+        r = await auth_client.post("/history/poll-now")
+        assert r.status_code == 200
+        assert "no stations" in r.text.lower()
+        assert "hx-refresh" not in {k.lower() for k in r.headers}
+    finally:
+        app.dependency_overrides.pop(get_solis_client, None)
 
 
 # --- JSON endpoints --------------------------------------------------------

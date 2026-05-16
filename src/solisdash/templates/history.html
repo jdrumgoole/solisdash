@@ -7,9 +7,24 @@
 </hgroup>
 
 {% if not stations %}
-  <p role="alert" class="error">
-    No stations stored yet. Run <code>uv run python -m invoke poll-once</code> first.
-  </p>
+  <article id="poll-now-card">
+    <header><strong>No stations stored yet</strong></header>
+    <p>
+      Solisdash hasn't pulled any data from SolisCloud yet. Click below to
+      fetch each station's current state once — the charts will fill in as
+      the background poller (or further manual polls) runs.
+    </p>
+    <button
+      type="button"
+      hx-post="/history/poll-now"
+      hx-target="#poll-now-result"
+      hx-swap="innerHTML"
+      hx-indicator="#poll-now-spinner"
+      hx-disabled-elt="this"
+    >Poll SolisCloud now</button>
+    <span id="poll-now-spinner" class="htmx-indicator muted">  Polling…</span>
+    <div id="poll-now-result" class="test-slot"></div>
+  </article>
 {% else %}
   <form id="history-form" onsubmit="return false">
     <fieldset class="grid">

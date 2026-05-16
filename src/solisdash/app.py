@@ -152,15 +152,16 @@ async def get_solis_client(request: Request) -> SolisClient:
     which `_resolve_tiles` catches and renders as a friendly alert
     ("SolisCloud rejected the call: …" — visible nudge to configure).
     """
-    if request.app.state.solis_client is None:
+    existing: SolisClient | None = getattr(request.app.state, "solis_client", None)
+    if existing is None:
         settings = get_settings()
-        request.app.state.solis_client = SolisClient(
+        existing = SolisClient(
             base_url=settings.SOLIS_API_URL,
             key_id=settings.SOLIS_KEY_ID,
             key_secret=settings.SOLIS_KEYSECRET,
         )
-    client: SolisClient = request.app.state.solis_client
-    return client
+        request.app.state.solis_client = existing
+    return existing
 
 
 async def get_tiles_service(
@@ -732,6 +733,48 @@ async def history_page(
             "current_month": today[:7],
             "current_year": today[:4],
         },
+    )
+
+
+@app.post("/history/poll-now", response_class=HTMLResponse, response_model=None)
+async def history_poll_now(
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+    solis: SolisClient = Depends(get_solis_client),
+    user: dict[str, Any] = Depends(require_user),
+) -> HTMLResponse:
+    """Pull `stationDetail` for every station once and upsert the snapshots.
+
+    Lets the user populate `stations` / `station_samples` from the GUI on a
+    fresh install (or recover after the scheduler has been off), instead of
+    having to drop to a shell and run `invoke poll-once`.
+    """
+    poller = Poller(solis=solis, db=db)
+    try:
+        wrote = await poller.poll_current_all()
+    except SolisAPIError as exc:
+        return HTMLResponse(
+            f'<p role="alert" class="error">SolisCloud rejected the call: '
+            f"[{exc.code}] {exc.msg}. Check the SolisCloud credentials in "
+            f'<a href="/settings">Settings</a>.</p>',
+            status_code=200,
+        )
+    except httpx.HTTPError as exc:
+        return HTMLResponse(
+            f'<p role="alert" class="error">Could not reach SolisCloud: '
+            f"{type(exc).__name__}: {exc}</p>",
+            status_code=200,
+        )
+    if wrote == 0:
+        return HTMLResponse(
+            '<p role="alert" class="error">SolisCloud returned no stations for '
+            'this account. Check the API key in <a href="/settings">Settings</a>.</p>'
+        )
+    # Trigger a full page reload via HTMX so the chart UI mounts in place of
+    # the empty-state alert.
+    return HTMLResponse(
+        f'<p class="test-result success">✓ Polled {wrote} station(s). '
+        "Reloading…</p>",
+        headers={"HX-Refresh": "true"},
     )
 
 
