@@ -4,6 +4,15 @@ All notable changes to **Solisdash** are documented here. Version numbers
 follow [Semantic Versioning](https://semver.org/). The package is published
 to PyPI on every `vX.Y.Z` tag push.
 
+## 0.7.3 — 2026-05-16
+
+### Changed
+- Softened the Settings page footnote about environment variables. The
+  previous wording told every user that env vars "still take precedence
+  over what's written here", which is jargon for a GUI-only client; now
+  it just notes that same-named env vars may override saved values on
+  managed deployments.
+
 ## 0.7.2 — 2026-05-16
 
 ### Changed
