@@ -4,6 +4,27 @@ All notable changes to **Solisdash** are documented here. Version numbers
 follow [Semantic Versioning](https://semver.org/). The package is published
 to PyPI on every `vX.Y.Z` tag push.
 
+## 0.8.1 — 2026-05-16
+
+### Fixed
+- **HTMX buttons (Test MongoDB connection, Test SolisCloud, Poll
+  SolisCloud now) silently did nothing inside pywebview.** HTMX was
+  loaded from a CDN with SRI; pywebview's WKWebView dropped the script
+  in some environments (offline, strict caching, SRI mismatches) and
+  the buttons stopped working with no visible error. Solisdash now
+  vendors HTMX, Pico CSS, Chart.js, and the Chart.js date-fns adapter
+  under `static/vendor/`, so the entire UI works without network access
+  to a CDN.
+
+### Added
+- `tests/test_clickability.py` regression suite. For every authed
+  page (`/`, `/history`, `/alarms`, `/settings`) we extract every
+  `<a href>`, `<form action>`, `[hx-{get,post,put,delete}]` URL
+  pointing at our own app and assert each endpoint doesn't 5xx. The
+  same file also asserts (a) no template references a CDN at runtime,
+  (b) all four vendored assets are present on disk, and (c) `style.css`
+  doesn't sneak in a `pointer-events: none` overlay.
+
 ## 0.8.0 — 2026-05-16
 
 ### Added

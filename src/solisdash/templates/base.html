@@ -4,10 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Solisdash{% endblock %}</title>
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
-  />
+  <link rel="stylesheet" href="{{ url_for('static', path='vendor/pico.min.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}" />
   <script>
     // Apply persisted theme as early as possible to avoid a flash on load.
@@ -20,12 +17,7 @@
       }
     })();
   </script>
-  <script
-    src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"
-    integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
-    crossorigin="anonymous"
-    defer
-  ></script>
+  <script src="{{ url_for('static', path='vendor/htmx.min.js') }}" defer></script>
 </head>
 <body>
   <header class="container">

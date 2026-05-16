@@ -75,8 +75,10 @@ async def test_history_page_renders_station_picker_and_chart_canvas(
     assert 'id="station-select"' in body
     assert "Roof" in body
     assert 'id="history-chart"' in body
-    assert "chart.js" in body
+    assert "chart.umd.min.js" in body
     assert "chartjs-adapter-date-fns" in body
+    # Must be vendored under /static/vendor/ (see test_clickability.py).
+    assert "cdn.jsdelivr.net" not in body
 
 
 async def test_history_page_renders_metric_tabs(
