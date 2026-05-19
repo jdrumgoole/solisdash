@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     SCHEDULER_DAILY_MINUTE_UTC: int = 30
     SCHEDULER_RATE_PER_SEC: float = 1.5
 
+    # Tariffs for the Cashflow chart — left at zero by default until the
+    # user sets them. SolisCloud's `money` field is `production * tariff`
+    # at whatever single rate they have configured upstream; it doesn't
+    # capture real-world cashflow which depends on a different feed-in
+    # rate vs a higher import rate.
+    SOLIS_FEED_IN_TARIFF: float = 0.0     # EUR (or whatever currency) per exported kWh
+    SOLIS_IMPORT_TARIFF: float = 0.0      # EUR per imported kWh
+    SOLIS_CURRENCY: str = "EUR"
+
 
 @lru_cache
 def get_settings() -> Settings:

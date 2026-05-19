@@ -1228,7 +1228,7 @@ wheels = [
 
 [[package]]
 name = "solisdash"
-version = "0.8.2"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },

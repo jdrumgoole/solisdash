@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import base64
+import asyncio
 import logging
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,7 @@ from solisdash.auth import (
 from solisdash.client import SolisAPIError, SolisClient
 from solisdash.config import get_settings
 from solisdash.configfile import delete_toml, user_config_toml_path, write_toml
-from solisdash.db import ensure_indexes
+from solisdash.db import SOLISCLOUD_COLLECTIONS, ensure_indexes
 from solisdash.history import (
     METRIC_ENERGY,
     METRIC_POWER,
@@ -48,7 +49,7 @@ from solisdash.history import (
     metric_supports,
     parse_month,
 )
-from solisdash.poller import Poller
+from solisdash.poller import Poller, iter_dates, iter_months
 from solisdash.ratelimit import TokenBucket
 from solisdash.scheduler import build_scheduler
 from solisdash.tiles import LiveTilesService, TilesData
@@ -67,13 +68,17 @@ HERE = Path(__file__).parent
 TEMPLATES_DIR = HERE / "templates"
 STATIC_DIR = HERE / "static"
 
-# 1x1 transparent PNG, just to silence /favicon.ico 404s during dev.
-_FAVICON_PNG = base64.b64decode(
-    b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-)
+_FAVICON_PNG = (HERE / "static" / "favicon.png").read_bytes()
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["version"] = __version__
+# Per-process cache buster for static assets. Changes on every server
+# restart so a CSS / JS edit invalidates the browser cache as soon as
+# the new process is up. Released builds get a fresh nonce because they
+# start a fresh process; in dev, `invoke restart` is enough to bust.
+import time as _time  # noqa: E402
+
+templates.env.globals["asset_version"] = f"{__version__}-{_time.time_ns()}"
 
 
 @asynccontextmanager
@@ -91,30 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.poller = None
     app.state.rate_limiter = None
 
-    settings = get_settings()
-    if settings.RUN_SCHEDULER and settings.SOLIS_KEY_ID and settings.SOLIS_MONGODB_URI:
-        app.state.rate_limiter = TokenBucket(
-            rate=settings.SCHEDULER_RATE_PER_SEC,
-            capacity=settings.SCHEDULER_RATE_PER_SEC * 2,
-        )
-        solis = SolisClient(
-            base_url=settings.SOLIS_API_URL,
-            key_id=settings.SOLIS_KEY_ID,
-            key_secret=settings.SOLIS_KEYSECRET,
-        )
-        mongo: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
-            settings.SOLIS_MONGODB_URI
-        )
-        await ensure_indexes(mongo[settings.SOLIS_MONGODB_DB])
-        app.state.solis_client = solis
-        app.state.mongo_client = mongo
-        app.state.poller = Poller(
-            solis=solis,
-            db=mongo[settings.SOLIS_MONGODB_DB],
-            rate_limiter=app.state.rate_limiter,
-        )
-        app.state.scheduler = build_scheduler(app.state.poller, settings)
-        app.state.scheduler.start()
+    await _ensure_scheduler_running(app)
 
     try:
         yield
@@ -294,7 +276,9 @@ async def ready(
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> Response:
-    """Empty 1x1 transparent PNG so browsers stop 404-ing during dev."""
+    """Serve the bundled Solisdash icon as the favicon. Same file the
+    pywebview window uses as its dock icon. Browsers cope with PNG
+    content at the `.ico` URL fine."""
     return Response(
         content=_FAVICON_PNG,
         media_type="image/png",
@@ -374,7 +358,7 @@ async def _setup_done() -> bool:
     return await _users_exist_in(settings.SOLIS_MONGODB_URI, settings.SOLIS_MONGODB_DB)
 
 
-def _setup_defaults() -> dict[str, str]:
+def _setup_defaults() -> dict[str, Any]:
     """Current settings rendered as form defaults for the wizard / settings page."""
     s = get_settings()
     return {
@@ -382,15 +366,72 @@ def _setup_defaults() -> dict[str, str]:
         "SOLIS_MONGODB_DB": s.SOLIS_MONGODB_DB or "solis",
         "SOLIS_API_URL": s.SOLIS_API_URL,
         "SOLIS_KEY_ID": s.SOLIS_KEY_ID,
-        # Never echo the secret back to the page — admin re-enters if changing.
-        "SOLIS_KEYSECRET_PRESENT": "yes" if s.SOLIS_KEYSECRET else "",
+        # Single-user dashboard behind login — the user wants to see what's
+        # configured, so we render the actual secret value rather than
+        # masking it. Anyone with login access can already read
+        # `solisdash.toml` on disk anyway.
+        "SOLIS_KEYSECRET": s.SOLIS_KEYSECRET,
         "SOLIS_STATION_ID": s.SOLIS_STATION_ID,
+        "SOLIS_FEED_IN_TARIFF": s.SOLIS_FEED_IN_TARIFF,
+        "SOLIS_IMPORT_TARIFF": s.SOLIS_IMPORT_TARIFF,
+        "SOLIS_CURRENCY": s.SOLIS_CURRENCY,
+        "RUN_SCHEDULER": s.RUN_SCHEDULER,
+        "SCHEDULER_SAMPLE_MINUTES": s.SCHEDULER_SAMPLE_MINUTES,
+        "SCHEDULER_DAILY_HOUR_UTC": s.SCHEDULER_DAILY_HOUR_UTC,
+        "SCHEDULER_DAILY_MINUTE_UTC": s.SCHEDULER_DAILY_MINUTE_UTC,
+        "SCHEDULER_RATE_PER_SEC": s.SCHEDULER_RATE_PER_SEC,
     }
 
 
+async def _ensure_scheduler_running(app: FastAPI) -> None:
+    """Start the background poller if config is complete and it isn't already.
+
+    Called from `lifespan` at boot AND from the wizard / settings-save paths,
+    so that turning on `RUN_SCHEDULER` (or wiring up Mongo + SolisCloud for
+    the first time) starts the cron immediately rather than waiting for a
+    process restart. Idempotent — a no-op when the scheduler is already
+    running or the config still isn't complete enough.
+    """
+    settings = get_settings()
+    needs_start = (
+        settings.RUN_SCHEDULER
+        and settings.SOLIS_KEY_ID
+        and settings.SOLIS_MONGODB_URI
+        and getattr(app.state, "scheduler", None) is None
+    )
+    if not needs_start:
+        return
+    app.state.rate_limiter = TokenBucket(
+        rate=settings.SCHEDULER_RATE_PER_SEC,
+        capacity=settings.SCHEDULER_RATE_PER_SEC * 2,
+    )
+    solis = SolisClient(
+        base_url=settings.SOLIS_API_URL,
+        key_id=settings.SOLIS_KEY_ID,
+        key_secret=settings.SOLIS_KEYSECRET,
+    )
+    mongo: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+        settings.SOLIS_MONGODB_URI
+    )
+    await ensure_indexes(mongo[settings.SOLIS_MONGODB_DB])
+    app.state.solis_client = solis
+    app.state.mongo_client = mongo
+    app.state.poller = Poller(
+        solis=solis,
+        db=mongo[settings.SOLIS_MONGODB_DB],
+        rate_limiter=app.state.rate_limiter,
+    )
+    app.state.scheduler = build_scheduler(app.state.poller, settings)
+    app.state.scheduler.start()
+
+
 async def _invalidate_clients(app: FastAPI) -> None:
-    """Close cached Mongo / SolisCloud clients so the next request re-creates
-    them against any settings we just persisted."""
+    """Close cached Mongo / SolisCloud clients AND stop the scheduler so the
+    next request re-creates them against any settings we just persisted."""
+    scheduler = getattr(app.state, "scheduler", None)
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
+        app.state.scheduler = None
     mongo: AsyncMongoClient[dict[str, Any]] | None = getattr(
         app.state, "mongo_client", None
     )
@@ -402,6 +443,8 @@ async def _invalidate_clients(app: FastAPI) -> None:
     app.state.mongo_client = None
     app.state.solis_client = None
     app.state.tiles_service = None
+    app.state.poller = None
+    app.state.rate_limiter = None
 
 
 @app.get("/login", response_class=HTMLResponse, response_model=None)
@@ -564,7 +607,10 @@ async def setup_submit(
             "from the /login page after saving."
         )
 
-    # Persist everything that's non-empty.
+    # Persist everything that's non-empty. RUN_SCHEDULER defaults to True
+    # after wizard completion — a self-hosted dashboard wants the daily
+    # rollup cron running. Dev/CI never goes through the wizard, so their
+    # `Settings.RUN_SCHEDULER` default of `False` is preserved.
     settings = get_settings()
     write_toml(
         {
@@ -574,10 +620,12 @@ async def setup_submit(
             "SOLIS_KEY_ID": solis_key_id.strip(),
             "SOLIS_KEYSECRET": solis_keysecret,
             "SESSION_SECRET": settings.SESSION_SECRET or secrets.token_urlsafe(32),
+            "RUN_SCHEDULER": True,
         }
     )
     get_settings.cache_clear()
     await _invalidate_clients(request.app)
+    await _ensure_scheduler_running(request.app)
 
     # Create the first admin in the freshly-configured Mongo.
     db = await get_db(request)
@@ -640,6 +688,7 @@ async def settings_page(
             "defaults": _setup_defaults(),
             "error": None,
             "saved": False,
+            "purged_counts": None,
         },
     )
 
@@ -653,6 +702,14 @@ async def settings_save(
     solis_key_id: str = Form(""),
     solis_keysecret: str = Form(""),
     solis_station_id: str = Form(""),
+    feed_in_tariff: float = Form(0.0),
+    import_tariff: float = Form(0.0),
+    currency: str = Form("EUR"),
+    run_scheduler: str | None = Form(None),
+    sample_minutes: int = Form(5),
+    daily_hour_utc: int = Form(0),
+    daily_minute_utc: int = Form(30),
+    rate_per_sec: float = Form(1.5),
     user: dict[str, Any] = Depends(require_user),
 ) -> HTMLResponse | RedirectResponse:
     """Persist edited settings to `solisdash.toml`, invalidate cached clients."""
@@ -663,6 +720,16 @@ async def settings_save(
         "SOLIS_API_URL": solis_api_url.strip() or settings.SOLIS_API_URL,
         "SOLIS_KEY_ID": solis_key_id.strip(),
         "SOLIS_STATION_ID": solis_station_id.strip(),
+        "SOLIS_FEED_IN_TARIFF": float(feed_in_tariff),
+        "SOLIS_IMPORT_TARIFF": float(import_tariff),
+        "SOLIS_CURRENCY": currency.strip() or "EUR",
+        # The unchecked-checkbox case sends no value at all, hence the
+        # `None` default — anything else is a True signal.
+        "RUN_SCHEDULER": run_scheduler is not None,
+        "SCHEDULER_SAMPLE_MINUTES": max(1, int(sample_minutes)),
+        "SCHEDULER_DAILY_HOUR_UTC": max(0, min(23, int(daily_hour_utc))),
+        "SCHEDULER_DAILY_MINUTE_UTC": max(0, min(59, int(daily_minute_utc))),
+        "SCHEDULER_RATE_PER_SEC": max(0.1, min(2.0, float(rate_per_sec))),
     }
     # Only overwrite the secret if the user actually entered a new one.
     if solis_keysecret:
@@ -671,6 +738,7 @@ async def settings_save(
     write_toml(updates)
     get_settings.cache_clear()
     await _invalidate_clients(request.app)
+    await _ensure_scheduler_running(request.app)
 
     return templates.TemplateResponse(
         request,
@@ -681,8 +749,12 @@ async def settings_save(
             "defaults": _setup_defaults(),
             "error": None,
             "saved": True,
+            "purged_counts": None,
         },
     )
+
+
+# Purge now lives on the Data tab — see `/data/purge` below.
 
 
 @app.post("/settings/test/mongo", response_class=HTMLResponse, response_model=None)
@@ -722,6 +794,76 @@ async def settings_reset(
     return redirect_to("/setup")
 
 
+# --- Data sync / management tab --------------------------------------------
+
+
+@app.get("/data", response_class=HTMLResponse, response_model=None)
+async def data_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_user),
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+) -> HTMLResponse:
+    """Hub for syncing with SolisCloud and managing local data.
+
+    Hosts Poll-now, Fetch-historical, and Purge so the History page can
+    stay focused on visualising data instead of capturing it."""
+    last_sample = await db["station_samples"].find_one(sort=[("ts", -1)])
+    last_sample_ts: Any = last_sample.get("ts") if last_sample else None
+    if isinstance(last_sample_ts, datetime) and last_sample_ts.tzinfo is None:
+        last_sample_ts = last_sample_ts.replace(tzinfo=timezone.utc)
+    station_count = await db["stations"].count_documents({})
+    sample_count = await db["station_samples"].estimated_document_count()
+    daily_count = await db["station_daily"].estimated_document_count()
+    today = datetime.now(timezone.utc).date().isoformat()
+    return templates.TemplateResponse(
+        request,
+        "data.html",
+        {
+            "user": user,
+            "last_sample_ts": last_sample_ts,
+            "station_count": station_count,
+            "sample_count": sample_count,
+            "daily_count": daily_count,
+            "today": today,
+            "backfill_default_start": f"{int(today[:4]) - 1:04d}-01-01",
+            "purged_counts": None,
+        },
+    )
+
+
+@app.post("/data/purge", response_class=HTMLResponse, response_model=None)
+async def data_purge(
+    request: Request,
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+    user: dict[str, Any] = Depends(require_user),
+) -> HTMLResponse:
+    """Drop every row of SolisCloud-sourced data, keep admin accounts and
+    config. The drop set is `SOLISCLOUD_COLLECTIONS` — by definition the
+    collections every row of which is re-downloadable, so a Poll-now or
+    Fetch from the /data tab puts the dashboard back to where it was.
+    Local state (`users`, the `solisdash.toml` config) is never touched."""
+    counts: dict[str, int] = {}
+    for collection in SOLISCLOUD_COLLECTIONS:
+        result = await db[collection].delete_many({})
+        counts[collection] = result.deleted_count
+    logging.getLogger(__name__).info("purged downloaded data: %s", counts)
+    today = datetime.now(timezone.utc).date().isoformat()
+    return templates.TemplateResponse(
+        request,
+        "data.html",
+        {
+            "user": user,
+            "last_sample_ts": None,
+            "station_count": 0,
+            "sample_count": 0,
+            "daily_count": 0,
+            "today": today,
+            "backfill_default_start": f"{int(today[:4]) - 1:04d}-01-01",
+            "purged_counts": counts,
+        },
+    )
+
+
 # --- History page -----------------------------------------------------------
 
 
@@ -730,9 +872,28 @@ async def history_page(
     request: Request,
     user: dict[str, Any] = Depends(require_user),
     history: HistoryService = Depends(get_history_service),
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
 ) -> HTMLResponse:
     stations = await history.list_stations()
     selected = stations[0]["id"] if stations else None
+    # Default tab + range chosen by which collection actually has data, so
+    # the user lands on a populated chart rather than a "No data" panel:
+    #   - station_daily present  → Energy / Month (the bars they just
+    #                              downloaded via Fetch or Poll)
+    #   - only station_samples   → Power / Day (the live curve)
+    #   - neither                → Power / Day (the empty-state poll
+    #                              button takes over anyway)
+    has_daily = bool(
+        stations and await db["station_daily"].count_documents({}, limit=1)
+    )
+    default_metric = "energy" if has_daily else "power"
+    default_view = "month" if has_daily else "day"
+    today_date = datetime.now(timezone.utc).date()
+    # Default range: last 30 days. Wide enough to show this month's daily
+    # bars when Energy is the default metric; auto_range clamps to the
+    # last 7 days when the active metric is sample-only (Power / Battery
+    # / Alarms), so it doesn't pull tens of thousands of sample points.
+    default_range_start = (today_date - timedelta(days=29)).isoformat()
     today = datetime.now(timezone.utc).date().isoformat()
     return templates.TemplateResponse(
         request,
@@ -744,8 +905,53 @@ async def history_page(
             "today": today,
             "current_month": today[:7],
             "current_year": today[:4],
+            # Default backfill window: from Jan 1 of last year. Wide enough
+            # to fill in a Year and All-time view comfortably, narrow enough
+            # not to spam SolisCloud on the first click.
+            "backfill_default_start": f"{int(today[:4]) - 1:04d}-01-01",
+            "default_metric": default_metric,
+            "default_view": default_view,
+            "default_range_start": default_range_start,
         },
     )
+
+
+async def _run_poll_now(
+    task_id: str,
+    poller: Poller,
+    station_ids: list[str],
+    months: list[str],
+    today: date,
+) -> None:
+    """First-run quick fill: current state per station, all of this year's
+    daily rollups, plus today's intra-day 5-minute curve.
+
+    Older days aren't intraday-backfilled here — that's the dedicated
+    Fetch panel's job. Drives the progress bar via the shared
+    `_BACKFILL_TASKS` dict."""
+    state = _BACKFILL_TASKS[task_id]
+    try:
+        for sid in station_ids:
+            sample = await poller.poll_current(sid)
+            if sample is not None:
+                state["rows_written"] += 1
+            state["done"] += 1
+        for sid in station_ids:
+            for month in months:
+                written = await poller.poll_daily_for_month(sid, month)
+                state["rows_written"] += written
+                state["done"] += 1
+        for sid in station_ids:
+            written = await poller.poll_intraday_for_date(sid, today)
+            state["rows_written"] += written
+            state["done"] += 1
+        state["status"] = "done"
+    except SolisAPIError as exc:
+        state["status"] = "error"
+        state["error"] = f"SolisCloud rejected the call: [{exc.code}] {exc.msg}"
+    except (httpx.HTTPError, Exception) as exc:
+        state["status"] = "error"
+        state["error"] = f"{type(exc).__name__}: {exc}"
 
 
 @app.post("/history/poll-now", response_class=HTMLResponse, response_model=None)
@@ -754,15 +960,16 @@ async def history_poll_now(
     solis: SolisClient = Depends(get_solis_client),
     user: dict[str, Any] = Depends(require_user),
 ) -> HTMLResponse:
-    """Pull `stationDetail` for every station once and upsert the snapshots.
-
-    Lets the user populate `stations` / `station_samples` from the GUI on a
-    fresh install (or recover after the scheduler has been off), instead of
-    having to drop to a shell and run `invoke poll-once`.
-    """
+    """Kick off a background "first-run" fetch: pulls `stationDetail` per
+    station (live tile data + `stations` upsert) plus this year's daily
+    rollups via `stationMonth`. Returns a polling fragment so the user
+    sees the progress bar tick rather than a 30-second blank wait."""
     poller = Poller(solis=solis, db=db)
+    today = datetime.now(timezone.utc).date()
+    year_start = today.replace(month=1, day=1)
+
     try:
-        wrote = await poller.poll_current_all()
+        station_ids = await poller.list_station_ids()
     except SolisAPIError as exc:
         return HTMLResponse(
             f'<p role="alert" class="error">SolisCloud rejected the call: '
@@ -776,17 +983,322 @@ async def history_poll_now(
             f"{type(exc).__name__}: {exc}</p>",
             status_code=200,
         )
-    if wrote == 0:
+    if not station_ids:
         return HTMLResponse(
             '<p role="alert" class="error">SolisCloud returned no stations for '
             'this account. Check the API key in <a href="/settings">Settings</a>.</p>'
         )
-    # Trigger a full page reload via HTMX so the chart UI mounts in place of
-    # the empty-state alert.
-    return HTMLResponse(
-        f'<p class="test-result success">✓ Polled {wrote} station(s). '
-        "Reloading…</p>",
-        headers={"HX-Refresh": "true"},
+
+    months = list(iter_months(year_start, today))
+    # Tick budget: 1 stationDetail + N stationMonth + 1 stationDay(today)
+    # per station, all running through the rate-limited poller.
+    total = len(station_ids) * (1 + len(months) + 1)
+    task_id = secrets.token_urlsafe(8)
+    _BACKFILL_TASKS[task_id] = {
+        "done": 0,
+        "total": total,
+        "rows_written": 0,
+        "status": "running",
+        "error": None,
+        "started_at": datetime.now(timezone.utc),
+    }
+    _BACKFILL_TASKS[task_id]["task"] = asyncio.create_task(
+        _run_poll_now(task_id, poller, station_ids, months, today)
+    )
+    return HTMLResponse(_backfill_progress_fragment(task_id))
+
+
+# --- backfill background tasks --------------------------------------------
+#
+# `POST /history/backfill` kicks off an asyncio task and returns immediately
+# with a progress fragment that polls `GET /history/backfill/status/{id}`
+# every 700ms. The status endpoint renders an updating progress bar until
+# the task finishes, then emits HX-Refresh so the charts pick up the new
+# rows. Single-process in-memory tracker — fine for a self-hosted dashboard;
+# bigger deployments would put this in Redis or similar.
+
+_BACKFILL_TASKS: dict[str, dict[str, Any]] = {}
+
+
+def _backfill_progress_fragment(task_id: str) -> str:
+    """Render the polling element that hits /history/backfill/status."""
+    state = _BACKFILL_TASKS.get(task_id)
+    if state is None:
+        return (
+            '<p class="test-result error">✗ Backfill task expired. '
+            "Try again — the server may have been restarted.</p>"
+        )
+    done = state["done"]
+    total = state["total"]
+    rows = state["rows_written"]
+    label = (
+        f"Downloading <strong>{done} / {total}</strong> month(s) "
+        f"(<strong>{rows}</strong> daily row(s) written so far)…"
+    )
+    if total == 0:
+        bar = '<progress style="width: 100%;"></progress>'
+    else:
+        bar = (
+            f'<progress value="{done}" max="{total}" style="width: 100%;"></progress>'
+        )
+    # Self-polling: the returned fragment re-fetches itself every 700ms via
+    # `hx-trigger="every 700ms"`. We can't use `load delay:700ms` because the
+    # `load` HTMX event only fires reliably on the first insertion — when an
+    # outerHTML swap replaces the same-id element with a fresh copy, `load`
+    # often doesn't re-fire, so the polling chain dies after one tick.
+    # `every` sets up a real interval that survives swaps.
+    # The parent <form> sets `hx-disinherit="hx-disabled-elt …"` to block
+    # the form's `hx-disabled-elt="find button"` from leaking down here —
+    # without that, HTMX inherits the selector onto every polling tick,
+    # finds no <button> in this fragment, fires htmx:targetError, and
+    # aborts the swap. The progress bar then sits frozen at 0/N forever.
+    return (
+        f'<div id="backfill-progress" '
+        f'hx-get="/history/backfill/status/{task_id}" '
+        f'hx-trigger="every 700ms" '
+        f'hx-swap="outerHTML" '
+        f'aria-live="polite">'
+        f"{bar}"
+        f'<p class="muted">{label}</p>'
+        f"</div>"
+    )
+
+
+async def _run_backfill(
+    task_id: str,
+    poller: Poller,
+    station_ids: list[str],
+    months: list[str],
+    dates: list[date],
+) -> None:
+    """Walk every (station, month) pair upserting daily rollups, then walk
+    every (station, day) pair upserting 5-minute intraday samples.
+
+    Two passes so the chart populates progressively — Energy/Charge/
+    Discharge tabs fill in first (cheap, one call per month), Power/
+    Battery curves catch up after (one call per day)."""
+    state = _BACKFILL_TASKS[task_id]
+    try:
+        for sid in station_ids:
+            for month in months:
+                written = await poller.poll_daily_for_month(sid, month)
+                state["rows_written"] += written
+                state["done"] += 1
+        for sid in station_ids:
+            for when in dates:
+                written = await poller.poll_intraday_for_date(sid, when)
+                state["rows_written"] += written
+                state["done"] += 1
+        state["status"] = "done"
+    except SolisAPIError as exc:
+        state["status"] = "error"
+        state["error"] = f"SolisCloud rejected the call: [{exc.code}] {exc.msg}"
+    except (httpx.HTTPError, Exception) as exc:
+        state["status"] = "error"
+        state["error"] = f"{type(exc).__name__}: {exc}"
+
+
+@app.post("/history/backfill", response_class=HTMLResponse, response_model=None)
+async def history_backfill(
+    start: str = Form(..., description="YYYY-MM-DD inclusive"),
+    end: str = Form(..., description="YYYY-MM-DD inclusive"),
+    db: AsyncDatabase[dict[str, Any]] = Depends(get_db),
+    solis: SolisClient = Depends(get_solis_client),
+    user: dict[str, Any] = Depends(require_user),
+) -> HTMLResponse:
+    """Kick off a background backfill task and return a polling fragment.
+
+    The actual `stationMonth` calls happen in `_run_backfill`. The client
+    polls `/history/backfill/status/{task_id}` and sees the progress bar
+    advance until completion."""
+    try:
+        start_d = date.fromisoformat(start)
+        end_d = date.fromisoformat(end)
+    except ValueError as exc:
+        return HTMLResponse(
+            f'<p class="test-result error">✗ Bad date: {exc}</p>', status_code=200
+        )
+    if end_d < start_d:
+        return HTMLResponse(
+            '<p class="test-result error">✗ End date must not be before start date.</p>',
+            status_code=200,
+        )
+
+    poller = Poller(solis=solis, db=db)
+    try:
+        station_ids = await poller.list_station_ids()
+    except SolisAPIError as exc:
+        return HTMLResponse(
+            f'<p class="test-result error">✗ SolisCloud rejected the call: '
+            f"[{exc.code}] {exc.msg}.</p>",
+            status_code=200,
+        )
+    except httpx.HTTPError as exc:
+        return HTMLResponse(
+            f'<p class="test-result error">✗ Could not reach SolisCloud: '
+            f"{type(exc).__name__}: {exc}</p>",
+            status_code=200,
+        )
+    if not station_ids:
+        return HTMLResponse(
+            '<p class="test-result error">✗ SolisCloud returned no stations '
+            "for this account.</p>",
+            status_code=200,
+        )
+
+    months = list(iter_months(start_d, end_d))
+    dates = list(iter_dates(start_d, end_d))
+    # One tick per (station, month) for daily rollups + one tick per
+    # (station, day) for the intraday 5-min curve.
+    total = len(station_ids) * (len(months) + len(dates))
+    task_id = secrets.token_urlsafe(8)
+    _BACKFILL_TASKS[task_id] = {
+        "done": 0,
+        "total": total,
+        "rows_written": 0,
+        "status": "running",
+        "error": None,
+        "started_at": datetime.now(timezone.utc),
+    }
+    # Store a strong reference to the task so the GC can't reap it mid-flight
+    # (asyncio.create_task's reference is weak — its docstring explicitly
+    # warns about this).
+    _BACKFILL_TASKS[task_id]["task"] = asyncio.create_task(
+        _run_backfill(task_id, poller, station_ids, months, dates)
+    )
+    return HTMLResponse(_backfill_progress_fragment(task_id))
+
+
+@app.get(
+    "/history/backfill/status/{task_id}",
+    response_class=HTMLResponse,
+    response_model=None,
+)
+async def history_backfill_status(
+    task_id: str,
+    user: dict[str, Any] = Depends(require_user),
+) -> HTMLResponse:
+    """HTMX polling target. Renders the current progress bar; on success
+    sets HX-Refresh so the page reloads and the charts pick up new rows."""
+    state = _BACKFILL_TASKS.get(task_id)
+    if state is None:
+        return HTMLResponse(
+            '<p class="test-result error">✗ Unknown backfill task. '
+            "It may have been cleared by a server restart.</p>"
+        )
+    if state["status"] == "error":
+        return HTMLResponse(
+            f'<p class="test-result error">✗ {state["error"]}</p>'
+        )
+    if state["status"] == "done":
+        rows = state["rows_written"]
+        total = state["total"]
+        return HTMLResponse(
+            f'<p class="test-result success">✓ Backfilled {rows} daily row(s) '
+            f"across {total} month-call(s). Reloading…</p>",
+            headers={"HX-Refresh": "true"},
+        )
+    return HTMLResponse(_backfill_progress_fragment(task_id))
+
+
+@app.get("/history/range.json")
+async def history_range_json(
+    station_id: str | None = Query(None),
+    start: str = Query(..., description="YYYY-MM-DD inclusive"),
+    end: str = Query(..., description="YYYY-MM-DD inclusive"),
+    metric: str = Query(METRIC_ENERGY),
+    resolution: str = Query("auto", description="auto | samples | daily | monthly | yearly"),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> JSONResponse:
+    """Auto-resolution range query.
+
+    The History page's only chart endpoint. Picks samples / daily /
+    monthly / yearly resolution based on (metric, span) and reports back
+    which one it used so the chart can label its x-axis sensibly."""
+    if metric not in METRIC_SUPPORTS:
+        raise HTTPException(status_code=400, detail=f"unknown metric: {metric!r}")
+    try:
+        start_d = date.fromisoformat(start)
+        end_d = date.fromisoformat(end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return JSONResponse(
+            {
+                "station_id": None,
+                "label": "",
+                "unit": "",
+                "points": [],
+                "resolution": "none",
+                "effective_start": start_d.isoformat(),
+                "effective_end": end_d.isoformat(),
+            }
+        )
+    settings = get_settings()
+    try:
+        series, resolution_label, eff_start, eff_end = await history.auto_range(
+            sid,
+            start_d,
+            end_d,
+            metric=metric,
+            requested_resolution=resolution,
+            feed_in_tariff=settings.SOLIS_FEED_IN_TARIFF,
+            import_tariff=settings.SOLIS_IMPORT_TARIFF,
+            currency=settings.SOLIS_CURRENCY,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    resolution = resolution_label  # rename for the JSON field below
+    return JSONResponse(
+        {
+            "station_id": sid,
+            "resolution": resolution,
+            "effective_start": eff_start.isoformat(),
+            "effective_end": eff_end.isoformat(),
+            **series.to_json(),
+        }
+    )
+
+
+@app.get("/history/range.csv")
+async def history_range_csv(
+    station_id: str | None = Query(None),
+    start: str = Query(..., description="YYYY-MM-DD inclusive"),
+    end: str = Query(..., description="YYYY-MM-DD inclusive"),
+    metric: str = Query(METRIC_ENERGY),
+    resolution: str = Query("auto"),
+    history: HistoryService = Depends(get_history_service),
+    user: dict[str, Any] = Depends(require_user),
+) -> Response:
+    if metric not in METRIC_SUPPORTS:
+        raise HTTPException(status_code=400, detail=f"unknown metric: {metric!r}")
+    try:
+        start_d = date.fromisoformat(start)
+        end_d = date.fromisoformat(end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    sid = await _resolve_station_id(history, station_id)
+    if sid is None:
+        return _csv_response(f"x,{metric}\n", f"history-{metric}.csv")
+    settings = get_settings()
+    try:
+        series, _resolution, _start, _end = await history.auto_range(
+            sid,
+            start_d,
+            end_d,
+            metric=metric,
+            requested_resolution=resolution,
+            feed_in_tariff=settings.SOLIS_FEED_IN_TARIFF,
+            import_tariff=settings.SOLIS_IMPORT_TARIFF,
+            currency=settings.SOLIS_CURRENCY,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _csv_response(
+        _series_to_csv(series, x_header="x", y_header=metric),
+        f"history-{metric}-{sid}-{start}-{end}.csv",
     )
 
 

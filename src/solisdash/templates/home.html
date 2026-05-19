@@ -17,4 +17,26 @@
 >
   {% include "_tiles.html" %}
 </section>
+
+<section id="dashboard-charts" class="dashboard-charts">
+  <article>
+    <header><strong>Today's power</strong> <small class="muted">sample resolution</small></header>
+    <div class="dashboard-chart-wrap"><canvas data-dashboard-chart
+      data-metric="power" data-range="today" data-color="rgb(11, 113, 159)"></canvas></div>
+  </article>
+  <article>
+    <header><strong>Battery SOC — last 7 days</strong> <small class="muted">5-min samples</small></header>
+    <div class="dashboard-chart-wrap"><canvas data-dashboard-chart
+      data-metric="battery" data-range="week" data-color="rgb(159, 113, 11)"></canvas></div>
+  </article>
+  <article>
+    <header><strong>This month's daily energy</strong> <small class="muted">daily totals</small></header>
+    <div class="dashboard-chart-wrap"><canvas data-dashboard-chart
+      data-metric="energy" data-range="month" data-color="rgb(11, 159, 90)"></canvas></div>
+  </article>
+</section>
+
+<script src="{{ url_for('static', path='vendor/chart.umd.min.js') }}?v={{ asset_version }}" defer></script>
+<script src="{{ url_for('static', path='vendor/chartjs-adapter-date-fns.bundle.min.js') }}?v={{ asset_version }}" defer></script>
+<script src="{{ url_for('static', path='dashboard-charts.js') }}?v={{ asset_version }}" defer></script>
 {% endblock %}

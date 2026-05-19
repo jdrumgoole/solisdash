@@ -16,7 +16,7 @@ async def test_ensure_indexes_creates_expected_index_keys(
     expected = {
         "users": {"_id_", "username_unique"},
         "stations": {"_id_", "station_id_unique"},
-        "station_samples": {"_id_", "station_ts"},
+        "station_samples": {"_id_", "station_ts_unique"},
         "station_daily": {"_id_", "station_date_unique"},
         "station_monthly": {"_id_", "station_month_unique"},
         "alarms": {"_id_", "alarm_id_unique", "station_alarm_time", "alarm_state"},
@@ -30,7 +30,7 @@ async def test_ensure_indexes_is_idempotent(mongo_db: AsyncDatabase[dict[str, An
     await ensure_indexes(mongo_db)
     await ensure_indexes(mongo_db)  # second call must not raise
     info = await mongo_db["station_samples"].index_information()
-    assert "station_ts" in info
+    assert "station_ts_unique" in info
 
 
 async def test_unique_indexes_have_unique_flag(mongo_db: AsyncDatabase[dict[str, Any]]) -> None:

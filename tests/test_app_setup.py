@@ -337,13 +337,100 @@ async def test_settings_renders_when_signed_in(
     body = r.text
     assert "/settings/save" in body
     assert "/settings/reset" in body
+    # Purge moved to the Data tab in 0.10 — settings shouldn't host it.
+    assert "/settings/purge-data" not in body
+    assert "/data/purge" not in body
     assert 'name="mongo_uri"' in body
     assert 'name="solis_keysecret"' in body
 
 
 async def test_settings_reset_logs_out_and_redirects_to_setup(
     signed_in_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
 ) -> None:
+    """Reset deletes `solisdash.toml`. Redirect XDG to a sandbox so we
+    don't nuke the developer's real `~/.config/solisdash/solisdash.toml`."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     r = await signed_in_client.post("/settings/reset", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/setup"
+
+
+async def test_data_purge_drops_only_repullable_rows(
+    signed_in_client: httpx.AsyncClient,
+    clean_db: AsyncDatabase[dict[str, Any]],
+) -> None:
+    """Purge clears only the unconditionally re-pullable collections.
+
+    `station_samples` (point-in-time polled data — SolisCloud only
+    retains the last ~week upstream) and `alarms` (unclear upstream
+    retention) must survive. Daily rollups and station metadata are
+    purged because SolisCloud can re-supply them at any time."""
+    from datetime import datetime, timezone
+
+    await clean_db["station_samples"].insert_many(
+        [
+            {"station_id": "S1", "ts": datetime(2026, 5, 1, tzinfo=timezone.utc), "x": 1},
+            {"station_id": "S1", "ts": datetime(2026, 5, 2, tzinfo=timezone.utc), "x": 2},
+        ]
+    )
+    await clean_db["station_daily"].insert_one(
+        {"station_id": "S1", "date": "2026-05-01", "energy": 1.0}
+    )
+    await clean_db["stations"].insert_one({"id": "S1"})
+    await clean_db["alarms"].insert_many([{"id": "a"}, {"id": "b"}])
+    pre_users = await clean_db["users"].count_documents({})
+    assert pre_users == 1
+
+    r = await signed_in_client.post("/data/purge")
+    assert r.status_code == 200
+    body = r.text
+    assert "Purged" in body
+    # The narrow drop set is empty.
+    for coll in ("station_daily", "stations"):
+        assert await clean_db[coll].count_documents({}) == 0, coll
+    # Irrecoverable collections survive.
+    assert await clean_db["station_samples"].count_documents({}) == 2
+    assert await clean_db["alarms"].count_documents({}) == 2
+    # And users are left alone.
+    assert await clean_db["users"].count_documents({}) == pre_users
+
+
+async def test_purge_drop_set_excludes_point_in_time_collections() -> None:
+    """Guards against any future PR widening purge to include
+    irrecoverable point-in-time collections. station_samples is gathered
+    at 5-min cadence and SolisCloud's stationDay only serves the last
+    few days — once purged, older samples are lost. Same risk profile
+    for alarms.
+
+    Locking the constant via a frozen-set assertion makes the rule
+    explicit and forces conscious review when someone proposes to widen
+    it."""
+    from solisdash.db import SOLISCLOUD_COLLECTIONS
+
+    assert set(SOLISCLOUD_COLLECTIONS) == {"station_daily", "stations"}, (
+        "If you're widening the purge drop set, make sure each new "
+        "collection is unconditionally re-downloadable from SolisCloud "
+        "regardless of age. station_samples and alarms are NOT."
+    )
+
+
+async def test_data_purge_requires_auth(auth_client: httpx.AsyncClient) -> None:
+    r = await auth_client.post("/data/purge", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+async def test_data_page_renders_with_capture_controls(
+    signed_in_client: httpx.AsyncClient,
+) -> None:
+    r = await signed_in_client.get("/data")
+    assert r.status_code == 200
+    body = r.text
+    # Poll, backfill, purge — all three live on /data now.
+    assert 'hx-post="/history/poll-now"' in body
+    assert 'hx-post="/history/backfill"' in body
+    assert 'action="/data/purge"' in body
+    # Stat strip
+    assert "station(s) stored" in body

@@ -1,5 +1,13 @@
 /* Solisdash overrides on top of Pico. */
 
+/* Knock everything down a notch. Pico defaults to ~16px / 1rem; pulling the
+   root to 87.5% makes the whole UI 14px-flavoured. Headings, buttons,
+   inputs, tiles, charts — all use `rem` units underneath, so they rescale
+   together and the layout stays consistent. */
+:root {
+  font-size: 87.5%;
+}
+
 main.container {
   padding-block: 2rem;
 }
@@ -12,7 +20,12 @@ footer.container {
 }
 
 form.inline {
-  display: inline-block;
+  /* Was inline-block, which baseline-aligned the button — the result was
+     the Sign-out button sitting visibly higher than the theme toggle in
+     the same nav. inline-flex with `align-items: center` makes the
+     button track the same vertical centre as its sibling <li> items. */
+  display: inline-flex;
+  align-items: center;
   margin: 0;
 }
 
@@ -118,6 +131,22 @@ p[role="alert"].error {
   margin-left: 0.25rem;
 }
 
+/* Home-page chart strip below the live tiles. Three side-by-side panels
+   on wide screens; stacks on narrow viewports. */
+.dashboard-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+  gap: 1rem;
+  margin-block-start: 1rem;
+}
+.dashboard-charts article {
+  margin: 0;
+}
+.dashboard-chart-wrap {
+  position: relative;
+  height: 14rem;
+}
+
 /* History page metric tabs */
 .metric-tabs {
   display: flex;
@@ -127,6 +156,10 @@ p[role="alert"].error {
   flex-wrap: wrap;
 }
 .metric-tab {
+  /* Pico reassigns `--pico-color` to the inverse of the button fill
+     (#fff for primary). We want plain text on a transparent card here,
+     so reach for `--pico-h1-color` — the heading text colour Pico
+     manages globally and flips correctly in dark mode. */
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -139,11 +172,29 @@ p[role="alert"].error {
   width: auto;
 }
 .metric-tab:hover {
-  color: var(--pico-color);
+  color: var(--pico-h1-color);
 }
 .metric-tab.active {
-  color: var(--pico-color);
+  color: var(--pico-h1-color);
   border-bottom-color: var(--pico-primary);
+}
+
+/* History date-range preset buttons. Sit on their own row under the
+   station / from / to inputs — embedding them in the same `<fieldset
+   class="grid">` made them line up against the date inputs with
+   different vertical padding and looked uneven. */
+.range-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-block: 0 1rem;
+}
+.range-presets button {
+  margin: 0;
+  padding-inline: 0.75rem;
+  padding-block: 0.35rem;
+  font-size: 0.85rem;
+  width: auto;
 }
 
 /* Sparkline under each home-page tile */

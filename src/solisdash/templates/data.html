@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Data · Solisdash{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Data</h2>
+  <p>Sync, backfill, and manage what Solisdash has downloaded from SolisCloud.</p>
+</hgroup>
+
+{% if purged_counts %}
+  <p class="test-result success">
+    ✓ Purged
+    {%- for name, count in purged_counts.items() %}
+      {{ count }} <code>{{ name }}</code>{% if not loop.last %},{% endif %}
+    {%- endfor %} row(s).
+  </p>
+{% endif %}
+
+<article>
+  <header><strong>Current state</strong></header>
+  <p>
+    {{ station_count }} station(s) stored,
+    {{ sample_count }} sample row(s),
+    {{ daily_count }} daily-rollup row(s).
+    {% if last_sample_ts %}
+      Most recent sample: <strong>{{ last_sample_ts.strftime('%Y-%m-%d %H:%M UTC') }}</strong>.
+    {% else %}
+      No samples polled yet.
+    {% endif %}
+  </p>
+  <button
+    type="button"
+    hx-post="/history/poll-now"
+    hx-target="#poll-result"
+    hx-swap="innerHTML"
+    hx-disabled-elt="this"
+  >Poll SolisCloud now</button>
+  <span class="muted" style="margin-inline-start: 0.5rem;">
+    Pulls current state plus this-year daily rollups.
+  </span>
+  <div id="poll-result" class="test-slot" aria-live="polite"></div>
+</article>
+
+<article>
+  <header><strong>Fetch historical data</strong></header>
+  <p class="muted">
+    Pulls one daily-rollup batch from SolisCloud per month per station in
+    the chosen range. Lets you backfill last year, prior years, or any
+    stretch of history that the routine poller hasn't covered.
+  </p>
+  <form
+    hx-post="/history/backfill"
+    hx-target="#backfill-result"
+    hx-swap="innerHTML"
+    hx-disabled-elt="find button"
+    hx-disinherit="hx-disabled-elt hx-target hx-swap"
+  >
+    <fieldset class="grid">
+      <label>
+        From
+        <input type="date" name="start" value="{{ backfill_default_start }}" required />
+      </label>
+      <label>
+        To
+        <input type="date" name="end" value="{{ today }}" required />
+      </label>
+      <label>
+        <span>&nbsp;</span>
+        <button type="submit">Fetch from SolisCloud</button>
+      </label>
+    </fieldset>
+    <div id="backfill-result" class="test-slot" aria-live="polite"></div>
+  </form>
+</article>
+
+<article class="danger-zone">
+  <header><strong>Purge re-pullable data</strong></header>
+  <p>
+    Drops <code>station_daily</code> (daily-rollup energy / money /
+    charge / discharge) and <code>stations</code> (station metadata).
+    Both can be re-fetched from SolisCloud any time via <strong>Poll
+    SolisCloud now</strong> or the date-ranged backfill above.
+  </p>
+  <p class="muted">
+    Deliberately leaves <code>station_samples</code> (5-minute polled
+    SOC / power / battery snapshots) and <code>alarms</code> alone —
+    SolisCloud only retains those for a short window upstream, so older
+    rows aren't recoverable once dropped. Admin accounts, the
+    <code>solisdash.toml</code> config, and the scheduler are never
+    touched.
+  </p>
+  <form method="post" action="/data/purge"
+        onsubmit="return confirm('Drop daily-rollup and station-metadata rows? Sample history (station_samples) and alarms are preserved.')">
+    <button type="submit" class="secondary outline">Purge re-pullable data</button>
+  </form>
+</article>
+{% endblock %}

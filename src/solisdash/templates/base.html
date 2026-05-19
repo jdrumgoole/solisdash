@@ -4,8 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Solisdash{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='vendor/pico.min.css') }}" />
-  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}" />
+  <link rel="icon" type="image/png" href="{{ url_for('static', path='favicon.png') }}?v={{ asset_version }}" />
+  <link rel="apple-touch-icon" href="{{ url_for('static', path='favicon.png') }}?v={{ asset_version }}" />
+  <link rel="stylesheet" href="{{ url_for('static', path='vendor/pico.min.css') }}?v={{ asset_version }}" />
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v={{ asset_version }}" />
   <script>
     // Apply persisted theme as early as possible to avoid a flash on load.
     (function () {
@@ -17,7 +19,7 @@
       }
     })();
   </script>
-  <script src="{{ url_for('static', path='vendor/htmx.min.js') }}" defer></script>
+  <script src="{{ url_for('static', path='vendor/htmx.min.js') }}?v={{ asset_version }}" defer></script>
 </head>
 <body>
   <header class="container">
@@ -27,6 +29,7 @@
         {% if request.session.get('user') %}
           <li><a href="/history">History</a></li>
           <li><a href="/alarms">Alarms</a></li>
+          <li><a href="/data" title="Sync &amp; manage data">Data</a></li>
           <li><a href="/settings" title="Configuration">⚙ Settings</a></li>
         {% endif %}
       </ul>

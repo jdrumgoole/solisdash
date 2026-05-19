@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from pymongo.asynchronous.database import AsyncDatabase
@@ -46,6 +46,12 @@ def _detail_to_sample(
     the live tiles fall back to the most recent stored sample.
     """
     ts = _ms_to_datetime(detail.get("dataTimestamp")) or polled_at
+    # Top-level projection of the metrics History / Live Tiles query
+    # fast. The full upstream payload (every transient measurement
+    # SolisCloud surfaces — family load power, running grid
+    # import/export, daily income, CO2 avoided, etc.) is stored under
+    # `raw`, so nothing is dropped between polls. New chart metrics can
+    # be wired up later just by reading the historical `raw` field.
     return {
         "station_id": station_id,
         "ts": ts,
@@ -57,8 +63,40 @@ def _detail_to_sample(
         "month_energy": _as_float(detail.get("monthEnergy")),
         "month_energy_unit": str(detail.get("monthEnergyStr") or "kWh"),
         "battery_soc": _as_float(detail.get("batteryPercent")),
+        "battery_power": _as_float(detail.get("batteryPower")),
+        "battery_power_unit": str(detail.get("batteryPowerStr") or "kW"),
         "alarm_count": _as_int(detail.get("warningInfoData")),
         "polled_at": polled_at,
+        "raw": {k: v for k, v in detail.items() if v is not None and v != ""},
+    }
+
+
+def _intraday_to_sample(
+    station_id: str, point: dict[str, Any], polled_at: datetime
+) -> dict[str, Any] | None:
+    """Project one element of a `stationDay` payload into a `station_samples`
+    doc. SolisCloud returns ~288 such points per day at 5-minute spacing
+    when the inverter is up; we upsert each into the same shape the live
+    poller produces, so the History page treats them indistinguishably."""
+    ts = _ms_to_datetime(point.get("dataTimestamp"))
+    if ts is None:
+        return None
+    return {
+        "station_id": station_id,
+        "ts": ts,
+        "psum": _as_float(point.get("psum") or point.get("power")),
+        "power": _as_float(point.get("power")),
+        "power_unit": str(point.get("psumStr") or point.get("powerStr") or "kW"),
+        "day_energy": _as_float(point.get("dayEnergy") or point.get("eDay")),
+        "day_energy_unit": str(point.get("dayEnergyStr") or "kWh"),
+        "battery_soc": _as_float(
+            point.get("batteryCapacitySoc") or point.get("batteryPercent")
+        ),
+        "battery_power": _as_float(point.get("batteryPower")),
+        "battery_power_unit": str(point.get("batteryPowerStr") or "kW"),
+        "polled_at": polled_at,
+        # Full upstream point — see note on `_detail_to_sample`.
+        "raw": {k: v for k, v in point.items() if v is not None and v != ""},
     }
 
 
@@ -79,6 +117,20 @@ def _row_to_daily(station_id: str, row: dict[str, Any]) -> dict[str, Any] | None
         "money": _as_float(row.get("money")),
         "money_unit": str(row.get("moneyStr") or ""),
         "full_hour": _as_float(row.get("fullHour")),
+        # Per-day battery charge / discharge totals. SolisCloud exposes
+        # these on the same `stationMonth` rows as `energy`, in kWh.
+        "battery_charge": _as_float(row.get("batteryChargeEnergy")),
+        "battery_charge_unit": str(row.get("batteryChargeEnergyStr") or "kWh"),
+        "battery_discharge": _as_float(row.get("batteryDischargeEnergy")),
+        "battery_discharge_unit": str(row.get("batteryDischargeEnergyStr") or "kWh"),
+        # Household-side daily totals — what SolisCloud's own dashboard
+        # shows as Daily Consumption / Import / Export.
+        "consumption": _as_float(row.get("homeLoadEnergy")),
+        "consumption_unit": str(row.get("homeLoadEnergyStr") or "kWh"),
+        "import_energy": _as_float(row.get("gridPurchasedEnergy")),
+        "import_energy_unit": str(row.get("gridPurchasedEnergyStr") or "kWh"),
+        "export_energy": _as_float(row.get("gridSellEnergy")),
+        "export_energy_unit": str(row.get("gridSellEnergyStr") or "kWh"),
     }
 
 
@@ -109,6 +161,16 @@ def _alarm_to_doc(
         "model": str(row.get("model") or ""),
         "polled_at": polled_at,
     }
+
+
+def iter_dates(start: date, end: date) -> Iterator[date]:
+    """Yield each calendar date from `start` through `end` inclusive."""
+    if end < start:
+        raise ValueError(f"end {end!r} is before start {start!r}")
+    d = start
+    while d <= end:
+        yield d
+        d = d + timedelta(days=1)
 
 
 def iter_months(start: date, end: date) -> Iterator[str]:
@@ -163,7 +225,15 @@ class Poller:
 
         polled_at = datetime.now(timezone.utc)
         sample = _detail_to_sample(station_id, detail, polled_at)
-        await self._db["station_samples"].insert_one(sample)
+        # Upsert on (station_id, ts) — SolisCloud's `dataTimestamp` doesn't
+        # always advance every minute, so back-to-back polls can produce
+        # the same ts. Without this we'd raise DuplicateKeyError on the
+        # unique index and log a noisy traceback every time.
+        await self._db["station_samples"].update_one(
+            {"station_id": sample["station_id"], "ts": sample["ts"]},
+            {"$set": sample},
+            upsert=True,
+        )
         await self._db["stations"].update_one(
             {"id": station_id},
             {
@@ -186,6 +256,39 @@ class Poller:
             if await self.poll_current(sid) is not None:
                 ok += 1
         return ok
+
+    async def poll_intraday_for_date(self, station_id: str, when: date) -> int:
+        """Upsert intra-day 5-minute samples for `when` into `station_samples`.
+
+        Each `stationDay` call returns the curve for one calendar date —
+        roughly 288 points when the inverter was producing. We upsert by
+        `(station_id, ts)` so re-running a backfill is idempotent."""
+        await self._limiter.acquire()
+        try:
+            points = await self._solis.station_day(
+                station_id=station_id,
+                money=self._money,
+                time=when.isoformat(),
+                time_zone=self._time_zone,
+            )
+        except SolisAPIError as exc:
+            log.warning(
+                "station_day %s %s failed: %s", station_id, when, exc
+            )
+            return 0
+        polled_at = datetime.now(timezone.utc)
+        written = 0
+        for pt in points:
+            doc = _intraday_to_sample(station_id, pt, polled_at)
+            if doc is None:
+                continue
+            await self._db["station_samples"].update_one(
+                {"station_id": doc["station_id"], "ts": doc["ts"]},
+                {"$set": doc},
+                upsert=True,
+            )
+            written += 1
+        return written
 
     async def poll_daily_for_month(self, station_id: str, month: str) -> int:
         """Upsert daily rollups for `month` (YYYY-MM). Returns rows written."""

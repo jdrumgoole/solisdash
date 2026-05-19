@@ -14,6 +14,23 @@ from dotenv import load_dotenv
 # invisible — set what you need here first.
 load_dotenv()
 os.environ.setdefault("SESSION_SECRET", "test-only-session-secret")
+# Force the scheduler off in the test process. The user-level toml at
+# ~/.config/solisdash/solisdash.toml leaks into the test Settings via
+# pydantic-settings' TomlConfigSettingsSource — a real install with
+# `RUN_SCHEDULER = true` in its toml would otherwise trip
+# scheduler-state-dependent tests AND make the test process poll
+# SolisCloud from CI.
+os.environ.setdefault("RUN_SCHEDULER", "false")
+# Sandbox `XDG_CONFIG_HOME` so any test that writes / deletes / reads
+# `solisdash.toml` (the setup wizard, Settings save, Settings reset,
+# /data purge, etc.) operates against a tmp dir instead of the
+# developer's real `~/.config/solisdash/solisdash.toml`. Previously,
+# `test_settings_reset_logs_out_and_redirects_to_setup` would silently
+# `delete_toml()` against the real path on every pytest run.
+import tempfile as _tempfile  # noqa: E402
+
+_TEST_XDG = _tempfile.mkdtemp(prefix="solisdash-test-xdg-")
+os.environ["XDG_CONFIG_HOME"] = _TEST_XDG
 
 import httpx  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

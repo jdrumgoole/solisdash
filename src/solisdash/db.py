@@ -14,6 +14,23 @@ from pymongo.errors import OperationFailure
 
 DEFAULT_DB_NAME = "solis"
 
+# Collections the /data Purge button is allowed to drop.
+#
+# Intentionally NARROW: only collections whose contents can be fully
+# re-downloaded from SolisCloud no matter how old they are. Point-in-time
+# polled data (`station_samples`, sample-by-sample SOC / power / battery
+# at 5-min cadence) is excluded — SolisCloud's `stationDay` endpoint only
+# retains recent days, so samples older than that window are
+# irrecoverable once purged. Alarms have unclear upstream retention and
+# are excluded for the same safety-first reason.
+#
+# `users` (admin accounts) and the `solisdash.toml` config are local
+# state, also never touched.
+SOLISCLOUD_COLLECTIONS: tuple[str, ...] = (
+    "station_daily",     # stationMonth (one row per day) — fully re-pullable for any past month
+    "stations",          # userStationList + stationDetail — re-pullable any time
+)
+
 INDEXES: dict[str, list[IndexModel]] = {
     "users": [
         IndexModel([("username", ASCENDING)], unique=True, name="username_unique"),
@@ -22,7 +39,19 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("id", ASCENDING)], unique=True, name="station_id_unique"),
     ],
     "station_samples": [
-        IndexModel([("station_id", ASCENDING), ("ts", ASCENDING)], name="station_ts"),
+        # `unique` so the stationDay intraday backfill is idempotent —
+        # re-running a backfill upserts the same per-5-minute points
+        # without duplicating them. Real samples always carry
+        # `station_id` (string) and `ts` (date); the query planner won't
+        # use a partial-filter index for indexed range scans without
+        # explicit $type clauses on every query, so we keep this plain
+        # `unique`. `ensure_indexes` handles drop-and-recreate when an
+        # older non-unique copy exists.
+        IndexModel(
+            [("station_id", ASCENDING), ("ts", ASCENDING)],
+            unique=True,
+            name="station_ts_unique",
+        ),
     ],
     "station_daily": [
         IndexModel(

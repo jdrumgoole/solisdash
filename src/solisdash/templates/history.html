@@ -7,31 +7,51 @@
 </hgroup>
 
 {% if not stations %}
-  <article id="poll-now-card">
+  <article>
     <header><strong>No stations stored yet</strong></header>
     <p>
-      Solisdash hasn't pulled any data from SolisCloud yet. Click below to
-      fetch each station's current state once — the charts will fill in as
-      the background poller (or further manual polls) runs.
+      Solisdash hasn't pulled any data from SolisCloud yet. Head to the
+      <strong><a href="/data">Data</a></strong> tab and click
+      <em>Poll SolisCloud now</em> to fill the dashboard.
     </p>
-    <button
-      type="button"
-      hx-post="/history/poll-now"
-      hx-target="#poll-now-result"
-      hx-swap="innerHTML"
-      hx-indicator="#poll-now-spinner"
-      hx-disabled-elt="this"
-    >Poll SolisCloud now</button>
-    <span id="poll-now-spinner" class="htmx-indicator muted">  Polling…</span>
-    <div id="poll-now-result" class="test-slot"></div>
+    <a href="/data" role="button">Go to Data tab</a>
   </article>
 {% else %}
-  <nav id="metric-tabs" class="metric-tabs" role="tablist" aria-label="Metric">
-    <button type="button" role="tab" class="metric-tab" data-metric="power">Power</button>
-    <button type="button" role="tab" class="metric-tab" data-metric="energy">Energy</button>
-    <button type="button" role="tab" class="metric-tab" data-metric="battery">Battery</button>
-    <button type="button" role="tab" class="metric-tab" data-metric="money">Money</button>
-    <button type="button" role="tab" class="metric-tab" data-metric="alarms">Alarms</button>
+  <nav id="metric-tabs" class="metric-tabs" role="tablist" aria-label="Metric"
+       data-initial-metric="{{ default_metric }}">
+    <button type="button" role="tab" class="metric-tab" data-metric="energy"
+            data-tooltip="Cumulative production in kWh. Daily bars for short ranges, monthly bars for wider, yearly bars beyond ~2 years."
+    >Energy</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="power"
+            data-tooltip="Total station output, sample by sample (kW). Day view only."
+    >Power</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="battery"
+            data-tooltip="State of Charge — how full the battery is right now (0–100%). Day view only."
+    >Battery SOC</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="battery_power"
+            data-tooltip="Instantaneous battery throughput (kW). Positive = discharging, negative = charging. Day view only."
+    >Battery power</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="battery_charge"
+            data-tooltip="Energy put INTO the battery per period (kWh). Daily rollup; not available at sample resolution."
+    >Charge</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="battery_discharge"
+            data-tooltip="Energy drawn OUT of the battery per period (kWh). Daily rollup; not available at sample resolution."
+    >Discharge</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="consumption"
+            data-tooltip="Energy the house consumed per period (kWh). Daily rollup."
+    >Consumption</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="import_energy"
+            data-tooltip="Energy pulled FROM the grid per period (kWh). Daily rollup."
+    >Import</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="export_energy"
+            data-tooltip="Energy fed TO the grid per period (kWh). Daily rollup."
+    >Export</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="net"
+            data-tooltip="Net = Export − Import per period (kWh). Positive bar = net producer (sold more than bought), negative bar = net consumer."
+    >Net</button>
+    <button type="button" role="tab" class="metric-tab" data-metric="cashflow"
+            data-tooltip="(Export × feed-in tariff) − (Import × import tariff) per period. Set your tariffs in Settings. Negative = net buyer."
+    >Cashflow</button>
   </nav>
 
   <form id="history-form" onsubmit="return false">
@@ -48,30 +68,32 @@
       </label>
 
       <label>
-        Range
-        <select name="view" id="view-select">
-          <option value="day" selected>Day (5 min)</option>
-          <option value="month">Month (daily)</option>
-          <option value="year">Year (monthly)</option>
-          <option value="all">All-time (yearly)</option>
+        From
+        <input type="date" id="range-start" name="start" value="{{ default_range_start }}" />
+      </label>
+
+      <label>
+        To
+        <input type="date" id="range-end" name="end" value="{{ today }}" />
+      </label>
+
+      <label>
+        Resolution
+        <select id="resolution-select" name="resolution">
+          <option value="auto" selected>Auto</option>
+          <option value="samples">Samples (5-min)</option>
+          <option value="daily">Daily</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
         </select>
       </label>
-
-      <label data-view-field="day">
-        Date
-        <input type="date" id="date-input" value="{{ today }}" />
-      </label>
-
-      <label data-view-field="month" hidden>
-        Month
-        <input type="month" id="month-input" value="{{ current_month }}" />
-      </label>
-
-      <label data-view-field="year" hidden>
-        Year
-        <input type="number" id="year-input" min="2000" max="2100" value="{{ current_year }}" />
-      </label>
     </fieldset>
+    <div class="range-presets" role="group" aria-label="Preset ranges">
+      <button type="button" class="secondary outline" data-preset="today">Today</button>
+      <button type="button" class="secondary outline" data-preset="month">This month</button>
+      <button type="button" class="secondary outline" data-preset="year">This year</button>
+      <button type="button" class="secondary outline" data-preset="all">All</button>
+    </div>
   </form>
 
   <article>
@@ -79,6 +101,7 @@
       <span>
         <strong id="chart-title">Power</strong>
         <small id="chart-unit" class="tile-unit"></small>
+        <small id="chart-resolution" class="muted"></small>
       </span>
       <a id="csv-download" class="secondary outline" role="button" href="#">Download CSV</a>
     </header>
@@ -89,7 +112,7 @@
   </article>
 {% endif %}
 
-<script src="{{ url_for('static', path='vendor/chart.umd.min.js') }}" defer></script>
-<script src="{{ url_for('static', path='vendor/chartjs-adapter-date-fns.bundle.min.js') }}" defer></script>
-<script src="{{ url_for('static', path='history.js') }}" defer></script>
+<script src="{{ url_for('static', path='vendor/chart.umd.min.js') }}?v={{ asset_version }}" defer></script>
+<script src="{{ url_for('static', path='vendor/chartjs-adapter-date-fns.bundle.min.js') }}?v={{ asset_version }}" defer></script>
+<script src="{{ url_for('static', path='history.js') }}?v={{ asset_version }}" defer></script>
 {% endblock %}

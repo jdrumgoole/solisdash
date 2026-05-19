@@ -46,12 +46,10 @@
     <input id="solis_api_url" name="solis_api_url" type="text" value="{{ defaults.SOLIS_API_URL }}" />
     <label for="solis_key_id">Key ID</label>
     <input id="solis_key_id" name="solis_key_id" type="text" value="{{ defaults.SOLIS_KEY_ID }}" />
-    <label for="solis_keysecret">Key Secret
-      {% if defaults.SOLIS_KEYSECRET_PRESENT %}
-        <small class="muted">(stored; leave blank to keep)</small>
-      {% endif %}
-    </label>
-    <input id="solis_keysecret" name="solis_keysecret" type="password" autocomplete="new-password" />
+    <label for="solis_keysecret">Key Secret</label>
+    <input id="solis_keysecret" name="solis_keysecret" type="text"
+           autocomplete="off" spellcheck="false"
+           value="{{ defaults.SOLIS_KEYSECRET }}" />
     <label for="solis_station_id">Station ID (optional pin)</label>
     <input id="solis_station_id" name="solis_station_id" type="text" value="{{ defaults.SOLIS_STATION_ID }}" />
     <button
@@ -63,6 +61,58 @@
       hx-swap="innerHTML"
     >Test SolisCloud</button>
     <div id="solis_test_result" class="test-slot"></div>
+  </article>
+
+  <article>
+    <header><strong>Scheduler</strong></header>
+    <p class="muted" style="margin-block: 0 0.75rem;">
+      Controls the in-process background poller. Sample cadence drives the
+      Power / SOC / Battery curves; the daily-rollup cron writes the
+      Energy / Money / Charge / Discharge bars once a day.
+    </p>
+    <label for="run_scheduler" style="display: flex; align-items: center; gap: 0.5rem; margin-block-end: 0.75rem;">
+      <input id="run_scheduler" name="run_scheduler" type="checkbox" value="1"
+             {% if defaults.RUN_SCHEDULER %}checked{% endif %}
+             style="width: auto; margin: 0;" />
+      <span>Run the background poller</span>
+    </label>
+    <label for="sample_minutes">Sample cadence (minutes between stationDetail polls)</label>
+    <input id="sample_minutes" name="sample_minutes"
+           type="number" step="1" min="1" max="60"
+           value="{{ defaults.SCHEDULER_SAMPLE_MINUTES }}" />
+    <label for="daily_hour_utc">Daily rollup hour (UTC, 0–23)</label>
+    <input id="daily_hour_utc" name="daily_hour_utc"
+           type="number" step="1" min="0" max="23"
+           value="{{ defaults.SCHEDULER_DAILY_HOUR_UTC }}" />
+    <label for="daily_minute_utc">Daily rollup minute (0–59)</label>
+    <input id="daily_minute_utc" name="daily_minute_utc"
+           type="number" step="1" min="0" max="59"
+           value="{{ defaults.SCHEDULER_DAILY_MINUTE_UTC }}" />
+    <label for="rate_per_sec">SolisCloud API rate cap (requests / second)</label>
+    <input id="rate_per_sec" name="rate_per_sec"
+           type="number" step="0.1" min="0.1" max="2.0"
+           value="{{ defaults.SCHEDULER_RATE_PER_SEC }}" />
+  </article>
+
+  <article>
+    <header><strong>Tariffs</strong></header>
+    <p class="muted" style="margin-block: 0 0.75rem;">
+      Used by the <strong>Cashflow</strong> chart on the History page.
+      SolisCloud's own “Money” field already uses a single fixed rate
+      against total production; cashflow distinguishes export revenue
+      from import cost so you can see real net pounds / euros.
+    </p>
+    <label for="feed_in_tariff">Feed-in tariff (per exported kWh)</label>
+    <input id="feed_in_tariff" name="feed_in_tariff"
+           type="number" step="0.0001" min="0"
+           value="{{ defaults.SOLIS_FEED_IN_TARIFF }}" />
+    <label for="import_tariff">Import tariff (per imported kWh)</label>
+    <input id="import_tariff" name="import_tariff"
+           type="number" step="0.0001" min="0"
+           value="{{ defaults.SOLIS_IMPORT_TARIFF }}" />
+    <label for="currency">Currency</label>
+    <input id="currency" name="currency" type="text"
+           value="{{ defaults.SOLIS_CURRENCY }}" />
   </article>
 
   <button type="submit">Save changes</button>
